@@ -433,3 +433,12 @@ body, html, #root {
   font-family: "JetBrains Mono", monospace;
   font-size: 10px;
 }
+
+.finder-header {
+  padding: 12px 14px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #1e1e1e;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e0e0e0;
+}

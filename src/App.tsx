@@ -46,11 +46,15 @@ function App() {
   const [openTabs, setOpenTabs] = useState<EditorDocument[]>([]);
   const [activeTabPath, setActiveTabPath] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+  const [recentFilePaths, setRecentFilePaths] = useState<string[]>([]);
 
   const [finderOpen, setFinderOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const [recentOpen, setRecentOpen] = useState(false);
+  const [recentSelectedIndex, setRecentSelectedIndex] = useState(0);
 
   const allFilePaths = useMemo(() => {
     if (!tree) return [];
@@ -68,6 +72,14 @@ function App() {
     [openTabs, activeTabPath]
   );
 
+  const updateRecentFiles = useCallback((path: string) => {
+    if (!projectRoot || !path.startsWith(projectRoot)) return;
+    setRecentFilePaths((prev) => {
+      const filtered = prev.filter((p) => p !== path);
+      return [path, ...filtered].slice(0, 20);
+    });
+  }, [projectRoot]);
+
   const handleOpenFolder = useCallback(async () => {
     if (openTabs.some((t) => t.isDirty)) {
       const ok = confirm("Unsaved changes will be lost. Open new folder?");
@@ -82,6 +94,7 @@ function App() {
       setTree(result.tree);
       setOpenTabs([]);
       setActiveTabPath("");
+      setRecentFilePaths([]);
       setOpenFolders(new Set([result.tree.path]));
     } catch (e) {
       setError(String(e));
@@ -94,6 +107,7 @@ function App() {
       const existing = openTabs.find((t) => t.path === path);
       if (existing) {
         setActiveTabPath(path);
+        updateRecentFiles(path);
         return;
       }
 
@@ -115,6 +129,7 @@ function App() {
             t.path === path ? { ...t, content, isLoading: false } : t
           )
         );
+        updateRecentFiles(path);
       } catch (e) {
         setError(String(e));
         setOpenTabs((prev) => {
@@ -126,7 +141,7 @@ function App() {
         );
       }
     },
-    [openTabs, activeTabPath]
+    [openTabs, activeTabPath, updateRecentFiles]
   );
 
   const handleSave = useCallback(async () => {
@@ -151,9 +166,53 @@ function App() {
     }
   }, [openTabs, activeTabPath]);
 
+  const handleSaveAll = useCallback(async () => {
+    const dirtyTabs = openTabs.filter((t) => t.isDirty && !t.isLoading && !t.isSaving);
+    if (dirtyTabs.length === 0) return;
+
+    // Mark all dirty tabs as saving
+    setOpenTabs((prev) =>
+      prev.map((t) => (t.isDirty && !t.isLoading && !t.isSaving ? { ...t, isSaving: true } : t))
+    );
+    setError(null);
+
+    // Save each tab independently, collecting errors
+    const results = await Promise.allSettled(
+      dirtyTabs.map(async (tab) => {
+        try {
+          await writeFile(tab.path, tab.content);
+          return { path: tab.path, success: true, error: null };
+        } catch (e) {
+          return { path: tab.path, success: false, error: String(e) };
+        }
+      })
+    );
+
+    // Update tab states based on results (only for tabs that participated in save)
+    const errors: string[] = [];
+    const savedPaths = new Set(dirtyTabs.map((t) => t.path));
+    setOpenTabs((prev) =>
+      prev.map((t) => {
+        if (!savedPaths.has(t.path)) return t;
+        const result = results.find((r) => r.status === "fulfilled" && r.value.path === t.path);
+        if (!result) return { ...t, isSaving: false };
+        const { success, error } = (result as PromiseFulfilledResult<{ path: string; success: boolean; error: string | null }>).value;
+        if (!success && error) {
+          errors.push(`${t.path}: ${error}`);
+        }
+        return { ...t, isDirty: success ? false : t.isDirty, isSaving: false };
+      })
+    );
+
+    if (errors.length > 0) {
+      setError(`Save all failed for some files:\n${errors.join("\n")}`);
+    }
+  }, [openTabs]);
+
   const handleSwitchTab = useCallback((path: string) => {
     setActiveTabPath(path);
-  }, []);
+    updateRecentFiles(path);
+  }, [updateRecentFiles]);
 
   const handleCloseTab = useCallback(
     (path: string) => {
@@ -194,16 +253,82 @@ function App() {
   }, [query]);
 
   useEffect(() => {
+    setRecentSelectedIndex(0);
+  }, [recentOpen]);
+
+  useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const isOpenFolder =
         (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o";
       const isFindFile =
         (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "n";
-      const isSave = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s";
+      const isSaveAll =
+        (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "s";
+      const isSave =
+        (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "s";
+      const isRecentFiles =
+        (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e";
 
+      // Handle Recent Files modal keyboard navigation
+      if (recentOpen) {
+        switch (e.key) {
+          case "Escape":
+            e.preventDefault();
+            setRecentOpen(false);
+            return;
+          case "ArrowDown":
+            e.preventDefault();
+            setRecentSelectedIndex((i) => Math.min(i + 1, recentFilePaths.length - 1));
+            return;
+          case "ArrowUp":
+            e.preventDefault();
+            setRecentSelectedIndex((i) => Math.max(i - 1, 0));
+            return;
+          case "Enter":
+            e.preventDefault();
+            if (recentFilePaths[recentSelectedIndex]) {
+              handleOpenFile(recentFilePaths[recentSelectedIndex]);
+              setRecentOpen(false);
+            }
+            return;
+        }
+      }
+
+      // Handle Finder modal keyboard navigation
+      if (finderOpen) {
+        switch (e.key) {
+          case "Escape":
+            e.preventDefault();
+            setFinderOpen(false);
+            return;
+          case "ArrowDown":
+            e.preventDefault();
+            setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
+            return;
+          case "ArrowUp":
+            e.preventDefault();
+            setSelectedIndex((i) => Math.max(i - 1, 0));
+            return;
+          case "Enter":
+            e.preventDefault();
+            if (filtered[selectedIndex]) {
+              handleOpenFile(filtered[selectedIndex]);
+              setFinderOpen(false);
+            }
+            return;
+        }
+      }
+
+      // Global shortcuts
       if (isOpenFolder) {
         e.preventDefault();
         handleOpenFolder();
+        return;
+      }
+
+      if (isSaveAll) {
+        e.preventDefault();
+        handleSaveAll();
         return;
       }
 
@@ -222,28 +347,12 @@ function App() {
         return;
       }
 
-      if (!finderOpen) return;
-
-      switch (e.key) {
-        case "Escape":
-          e.preventDefault();
-          setFinderOpen(false);
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          setSelectedIndex((i) => Math.max(i - 1, 0));
-          break;
-        case "Enter":
-          e.preventDefault();
-          if (filtered[selectedIndex]) {
-            handleOpenFile(filtered[selectedIndex]);
-            setFinderOpen(false);
-          }
-          break;
+      if (isRecentFiles) {
+        e.preventDefault();
+        if (recentFilePaths.length === 0) return;
+        setRecentOpen(true);
+        setRecentSelectedIndex(0);
+        return;
       }
     }
 
@@ -253,9 +362,13 @@ function App() {
     finderOpen,
     filtered,
     selectedIndex,
+    recentOpen,
+    recentFilePaths,
+    recentSelectedIndex,
     tree,
     handleOpenFolder,
     handleSave,
+    handleSaveAll,
     handleOpenFile,
   ]);
 
@@ -291,6 +404,35 @@ function App() {
               {filtered.length === 0 && (
                 <div className="finder-empty">No files found</div>
               )}
+            </div>
+            <div className="finder-hint">
+              <span>↑↓</span> navigate <span>↵</span> open <span>esc</span> close
+            </div>
+          </div>
+        </div>
+      )}
+
+      {recentOpen && (
+        <div className="finder-overlay" onClick={() => setRecentOpen(false)}>
+          <div className="finder-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="finder-header">Recent Files</div>
+            <div className="finder-list">
+              {recentFilePaths.map((p, idx) => (
+                <div
+                  key={p}
+                  className={`finder-item ${idx === recentSelectedIndex ? "active" : ""}`}
+                  onMouseEnter={() => setRecentSelectedIndex(idx)}
+                  onClick={() => {
+                    handleOpenFile(p);
+                    setRecentOpen(false);
+                  }}
+                >
+                  <span className="finder-icon">📝</span>
+                  <span className="finder-path">
+                    {toRelativePath(projectRoot, p)}
+                  </span>
+                </div>
+              ))}
             </div>
             <div className="finder-hint">
               <span>↑↓</span> navigate <span>↵</span> open <span>esc</span> close
