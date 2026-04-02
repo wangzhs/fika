@@ -626,3 +626,241 @@ body, html, #root {
   color: #808080;
   font-size: 13px;
 }
+
+/* Git UI Styles */
+.branch-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #094771;
+  border: 1px solid #1e1e1e;
+  border-radius: 4px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #ffffff;
+  -webkit-app-region: no-drag;
+}
+
+.branch-badge:hover {
+  background: #1177bb;
+}
+
+.branch-icon {
+  font-size: 12px;
+}
+
+.branch-name {
+  font-weight: 500;
+}
+
+/* Git Panel Styles */
+.git-panel {
+  height: 100%;
+  overflow: auto;
+  padding: 8px 0;
+}
+
+.git-empty {
+  padding: 40px;
+  text-align: center;
+  color: #808080;
+  font-size: 13px;
+}
+
+/* Changed Files List */
+.changed-files-list {
+  padding: 0;
+}
+
+.changed-file-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  cursor: pointer;
+  font-size: 12px;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.changed-file-item:hover {
+  background: #2a2d2e;
+}
+
+.file-status {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.file-status.status-M { color: #cca700; }
+.file-status.status-A { color: #7ee787; }
+.file-status.status-D { color: #ffa198; }
+.file-status.status-R { color: #79c0ff; }
+.file-status.status-C { color: #d2a8ff; }
+.file-status.status-U { color: #ff7b72; }
+.file-status.status-\? { color: #808080; }
+
+.file-path {
+  color: #d4d4d4;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Diff View */
+.diff-view {
+  height: 100%;
+  overflow: auto;
+}
+
+.diff-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #252526;
+  border-bottom: 1px solid #1e1e1e;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.back-btn {
+  background: #3c3c3c;
+  border: 1px solid #5c5c5c;
+  color: #cccccc;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 3px;
+}
+
+.back-btn:hover {
+  background: #4c4c4c;
+}
+
+.diff-file-path {
+  color: #e0e0e0;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.diff-hunk {
+  margin: 8px 0;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.diff-hunk-header {
+  color: #858585;
+  padding: 4px 16px;
+  background: #252526;
+  border-bottom: 1px solid #1e1e1e;
+}
+
+.diff-line {
+  display: flex;
+  padding: 2px 0;
+  white-space: pre;
+}
+
+.diff-line-num {
+  color: #858585;
+  min-width: 70px;
+  text-align: right;
+  padding-right: 12px;
+  font-size: 11px;
+}
+
+.diff-line-kind {
+  min-width: 16px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.diff-line-content {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diff-line.ctx { color: #d4d4d4; }
+.diff-line.add { background: rgba(46, 160, 67, 0.15); color: #7ee787; }
+.diff-line.add .diff-line-kind { color: #7ee787; }
+.diff-line.del { background: rgba(248, 81, 73, 0.15); color: #ffa198; }
+.diff-line.del .diff-line-kind { color: #ffa198; }
+
+/* Commit List */
+.commit-list {
+  padding: 0;
+}
+
+.commit-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.commit-item:hover {
+  background: #2a2d2e;
+}
+
+.commit-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.commit-hash-short {
+  font-family: "JetBrains Mono", monospace;
+  color: #79c0ff;
+  font-size: 11px;
+  min-width: 60px;
+}
+
+.commit-message {
+  color: #d4d4d4;
+  font-size: 12px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-meta {
+  display: flex;
+  gap: 12px;
+  padding-left: 70px;
+}
+
+.commit-author {
+  color: #a0a0a0;
+  font-size: 11px;
+}
+
+.commit-time {
+  color: #858585;
+  font-size: 11px;
+}
+
+/* Commit Files View */
+.commit-files-view {
+  height: 100%;
+  overflow: auto;
+}
+
+.commit-hash {
+  font-family: "JetBrains Mono", monospace;
+  color: #79c0ff;
+  font-size: 12px;
+}

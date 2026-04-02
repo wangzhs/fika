@@ -6,8 +6,12 @@ import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { css } from "@codemirror/lang-css";
 import "./App.css";
-import type { FileNode, EditorDocument, SearchResult, BottomPanelTab } from "./types";
-import { openFolder, readFile, writeFile, searchInProject } from "./api";
+import type { Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab } from "./types";
+import {
+  openFolder, readFile, writeFile, searchInProject,
+  getCurrentBranch, getBranches, switchBranch,
+  getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles
+} from "./api";
 import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
 import { collectFilePaths } from "./utils/tree";
@@ -71,6 +75,18 @@ function App() {
 
   // Bottom panel tab state
   const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("search");
+
+  // Git state
+  const [currentBranch, setCurrentBranch] = useState<string | null>(null);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [gitHistory, setGitHistory] = useState<Commit[]>([]);
+  const [gitChanges, setGitChanges] = useState<ChangedFile[]>([]);
+  const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
+  const [commitFiles, setCommitFiles] = useState<CommitFiles | null>(null);
+  const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
+  const [fileDiff, setFileDiff] = useState<FileDiff | null>(null);
+  const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false);
+  const [isGitRepo, setIsGitRepo] = useState(false);
 
   // Editor ref for scrolling to line
   const editorRef = useRef<ReactCodeMirrorRef>(null);
@@ -357,6 +373,118 @@ function App() {
       return next;
     });
   }, []);
+
+  // Git data fetching - each command is independent, failures don't affect others
+  const refreshGitData = useCallback(async () => {
+    if (!projectRoot) {
+      setIsGitRepo(false);
+      setCurrentBranch(null);
+      setBranches([]);
+      setGitHistory([]);
+      setGitChanges([]);
+      return;
+    }
+
+    // Check if it's a git repo first
+    let isRepo = false;
+    try {
+      const branch = await getCurrentBranch(projectRoot);
+      isRepo = branch !== null;
+      setCurrentBranch(branch);
+    } catch {
+      setCurrentBranch(null);
+    }
+
+    // Fetch other git data independently - failures in one don't affect others
+    const [branchesResult, historyResult, changesResult] = await Promise.allSettled([
+      getBranches(projectRoot),
+      getGitHistory(projectRoot, 50),
+      getWorkingTreeChanges(projectRoot),
+    ]);
+
+    if (branchesResult.status === 'fulfilled') {
+      setBranches(branchesResult.value);
+      if (branchesResult.value.length > 0) isRepo = true;
+    } else {
+      setBranches([]);
+    }
+
+    if (historyResult.status === 'fulfilled') {
+      setGitHistory(historyResult.value);
+      if (historyResult.value.length > 0) isRepo = true;
+    } else {
+      setGitHistory([]);
+    }
+
+    if (changesResult.status === 'fulfilled') {
+      setGitChanges(changesResult.value);
+    } else {
+      setGitChanges([]);
+    }
+
+    setIsGitRepo(isRepo);
+  }, [projectRoot]);
+
+  const handleSwitchBranch = useCallback(async (branchName: string) => {
+    if (!projectRoot) return;
+
+    // Check for unsaved changes
+    const dirtyTabs = openTabs.filter((t) => t.isDirty);
+    if (dirtyTabs.length > 0) {
+      const ok = confirm(`You have ${dirtyTabs.length} unsaved tab(s). Switching branches will close all tabs. Continue?`);
+      if (!ok) return;
+    }
+
+    try {
+      await switchBranch(projectRoot, branchName);
+      // Close all tabs to prevent stale content
+      setOpenTabs([]);
+      setActiveTabPath("");
+      setRecentFilePaths([]);
+      setSelectedDiffFile(null);
+      setFileDiff(null);
+      setSelectedCommit(null);
+      setCommitFiles(null);
+      await refreshGitData();
+      setBranchSwitcherOpen(false);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot, refreshGitData, openTabs]);
+
+  const handleShowCommitFiles = useCallback(async (commitHash: string) => {
+    if (!projectRoot) return;
+    try {
+      const files = await getCommitFiles(projectRoot, commitHash);
+      setSelectedCommit(commitHash);
+      setCommitFiles(files);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot]);
+
+  const handleShowFileDiff = useCallback(async (filePath: string) => {
+    if (!projectRoot) return;
+    try {
+      const diff = await getFileDiff(projectRoot, filePath);
+      setSelectedDiffFile(filePath);
+      setFileDiff(diff);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot]);
+
+  // Refresh git data when project changes or when switching to git tabs
+  useEffect(() => {
+    refreshGitData();
+  }, [refreshGitData]);
+
+  // Refresh git changes when switching to diff tab
+  useEffect(() => {
+    if (bottomPanelTab === "diff" && projectRoot && isGitRepo) {
+      getWorkingTreeChanges(projectRoot).then(setGitChanges).catch(() => setGitChanges([]));
+    }
+  }, [bottomPanelTab, projectRoot, isGitRepo]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -730,11 +858,49 @@ function App() {
         </div>
       )}
 
+      {/* Branch Switcher Modal */}
+      {branchSwitcherOpen && (
+        <div className="finder-overlay" onClick={() => setBranchSwitcherOpen(false)}>
+          <div className="finder-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="finder-header">Switch Branch</div>
+            <div className="finder-list">
+              {branches.length === 0 ? (
+                <div className="finder-empty">No branches found</div>
+              ) : (
+                branches.map((branch) => (
+                  <div
+                    key={branch.name}
+                    className={`finder-item ${branch.is_current ? "active" : ""}`}
+                    onClick={() => handleSwitchBranch(branch.name)}
+                  >
+                    <span className="finder-icon">{branch.is_current ? "●" : "○"}</span>
+                    <span className="finder-path">{branch.name}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="finder-hint">
+              <span>Click</span> to switch <span>esc</span> to close
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="titlebar">
         <span className="logo">Fika</span>
         <span className="project-name">
           {rootName || "No folder opened"}
         </span>
+        {isGitRepo && currentBranch && (
+          <button
+            className="branch-badge"
+            onClick={() => setBranchSwitcherOpen(true)}
+            title="Switch branch"
+          >
+            <span className="branch-icon">🌿</span>
+            <span className="branch-name">{currentBranch}</span>
+          </button>
+        )}
         <div className="spacer" />
         <button
           className="icon-btn"
@@ -902,17 +1068,134 @@ function App() {
             </div>
           )}
           {bottomPanelTab === "diff" && (
-            <div className="diff-content">
-              <div className="diff-hunk">
-                <div className="diff-line ctx">Git integration coming soon</div>
-              </div>
+            <div className="git-panel">
+              {!isGitRepo ? (
+                <div className="git-empty">Not a git repository</div>
+              ) : gitChanges.length === 0 ? (
+                <div className="git-empty">No working tree changes</div>
+              ) : (
+                <div className="git-changes">
+                  {selectedDiffFile && fileDiff ? (
+                    <div className="diff-view">
+                      <div className="diff-header">
+                        <button
+                          className="back-btn"
+                          onClick={() => {
+                            setSelectedDiffFile(null);
+                            setFileDiff(null);
+                          }}
+                        >
+                          ← Back to changes
+                        </button>
+                        <span className="diff-file-path">{fileDiff.path}</span>
+                      </div>
+                      <div className="diff-content">
+                        {fileDiff.hunks.length === 0 ? (
+                          <div className="diff-hunk">
+                            <div className="diff-line ctx">No diff available</div>
+                          </div>
+                        ) : (
+                          fileDiff.hunks.map((hunk, idx) => (
+                            <div key={idx} className="diff-hunk">
+                              <div className="diff-hunk-header">{hunk.header}</div>
+                              {hunk.lines.map((line, lineIdx) => (
+                                <div
+                                  key={lineIdx}
+                                  className={`diff-line ${line.kind === "+" ? "add" : line.kind === "-" ? "del" : "ctx"}`}
+                                >
+                                  <span className="diff-line-num">
+                                    {line.old_line ?? ""}
+                                    {line.old_line && line.new_line ? "/" : ""}
+                                    {line.new_line ?? ""}
+                                  </span>
+                                  <span className="diff-line-kind">{line.kind}</span>
+                                  <span className="diff-line-content">{line.content}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="changed-files-list">
+                      {gitChanges.map((file) => (
+                        <div
+                          key={file.path}
+                          className="changed-file-item"
+                          onClick={() => handleShowFileDiff(file.path)}
+                        >
+                          <span className={`file-status status-${file.status}`}>{file.status}</span>
+                          <span className="file-path">{file.path}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {bottomPanelTab === "log" && (
-            <div className="diff-content">
-              <div className="diff-hunk">
-                <div className="diff-line ctx">Git log will appear here</div>
-              </div>
+            <div className="git-panel">
+              {!isGitRepo ? (
+                <div className="git-empty">Not a git repository</div>
+              ) : selectedCommit && commitFiles ? (
+                <div className="commit-files-view">
+                  <div className="diff-header">
+                    <button
+                      className="back-btn"
+                      onClick={() => {
+                        setSelectedCommit(null);
+                        setCommitFiles(null);
+                      }}
+                    >
+                      ← Back to history
+                    </button>
+                    <span className="commit-hash">{commitFiles.hash.substring(0, 7)}</span>
+                  </div>
+                  <div className="changed-files-list">
+                    {commitFiles.files.length === 0 ? (
+                      <div className="git-empty">No files changed</div>
+                    ) : (
+                      commitFiles.files.map((file) => (
+                        <div
+                          key={file.path}
+                          className="changed-file-item"
+                          onClick={() => handleOpenFile(file.path)}
+                        >
+                          <span className={`file-status status-${file.status}`}>{file.status}</span>
+                          <span className="file-path">{file.path}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="commit-list">
+                  {gitHistory.length === 0 ? (
+                    <div className="git-empty">No commits found</div>
+                  ) : (
+                    gitHistory.map((commit) => (
+                      <div
+                        key={commit.hash}
+                        className="commit-item"
+                        onClick={() => handleShowCommitFiles(commit.hash)}
+                      >
+                        <div className="commit-main">
+                          <span className="commit-hash-short">{commit.short_hash}</span>
+                          <span className="commit-message" title={commit.message}>
+                            {commit.message.split("\n")[0]}
+                          </span>
+                        </div>
+                        <div className="commit-meta">
+                          <span className="commit-author">{commit.author}</span>
+                          <span className="commit-time">{commit.time}</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           )}
           {bottomPanelTab === "blame" && (

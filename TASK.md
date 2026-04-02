@@ -23,8 +23,8 @@
 
 ## Current Iteration
 
-- Iteration: `v1.4`
-- Status: `approved`
+- Iteration: `v1.5`
+- Status: `fixed_after_review`
 - Owner: `Claude`
 
 ---
@@ -32,74 +32,77 @@
 ## Task Brief
 
 目标：
-- 增加文件内查找
-- 增加全局文本搜索
-- 让底部面板开始承载真实功能结果
-- 保持现有文件树、Finder、多标签、Recent Files、Save All 行为稳定
+- 增加 Git 历史查看
+- 增加文件 diff 查看
+- 增加分支切换
+- 让底部面板真正承载 Git 内容，而不是搜索以外的静态占位
 
 本轮范围：
 - Rust/Tauri 后端
-  - 新增项目内文本搜索命令
-  - 仅搜索当前已打开项目内的文本文件
-  - 继续跳过 `.git`、`node_modules`、`dist`、`target`、隐藏目录
-  - 返回结构化搜索结果：
-    - 文件路径
-    - 行号
-    - 行内容摘要
-    - 命中片段或等价信息
+  - 新增 Git 相关命令，优先使用系统 `git` 命令封装
+  - 至少支持：
+    - 获取当前分支
+    - 获取本地分支列表
+    - 切换到已有分支
+    - 获取 commit history
+    - 获取 working tree 改动列表
+    - 获取单文件 diff
+    - 获取某个 commit 的文件变更摘要
+  - 返回结构化数据，不要让前端直接解析原始 git 输出
 - React 前端
-  - 增加文件内查找 UI
-    - 支持 `Cmd/Ctrl+F`
-    - 至少支持当前文件关键字查找和结果计数/定位
-  - 增加全局文本搜索 UI
-    - 支持 `Cmd/Ctrl+Shift+F`
-    - 搜索结果显示在底部面板
-    - 结果按文件分组或线性展示，二选一，但要清晰
-    - 点击搜索结果后：
-      - 打开对应文件
-      - 激活对应 tab
-      - 尽量定位到对应行
-  - 底部面板开始承载真实搜索内容，不再只是静态 Git 占位
+  - 顶部或合适位置显示当前分支
+  - 增加 branch switcher UI
+  - 底部面板中让：
+    - `Diff` 显示真实文件 diff
+    - `Log` 显示真实 commit history
+  - 至少支持这条链路：
+    - 查看当前分支
+    - 打开 branch 列表
+    - 切换分支
+    - 查看 history
+    - 点某个 commit 看它改了哪些文件
+    - 点某个 changed file 看 diff
+    - 查看 working tree changed files，并点开 diff
+  - 继续保留搜索功能，不要回退
 - 代码结构
-  - 可以新增搜索相关类型、组件、工具函数
+  - 可以新增 git 类型、api、组件
   - 不要引入全局状态库
-  - 不要顺手开始做 Git 真实功能
+  - 不要开始做 commit/stage/rebase/cherry-pick
 
 ---
 
 ## Constraints
 
 本轮不要做：
-- Git 真实功能
-- 新建/删除/重命名文件
-- 持久化搜索历史
-- 正则搜索
-- replace/replace all
-- 高级过滤器
-- pinned tabs / tab 拖拽
+- stage / unstage
+- commit
+- stash
+- merge / rebase / cherry-pick
+- 远程仓库操作
+- blame
+- 新建分支
+- 全局搜索增强
 - 大规模 UI 重做
 
 实现要求：
-- 文件内查找不能破坏现有编辑器编辑行为
-- 全局搜索必须只在当前项目内搜索
-- 搜索结果必须基于当前项目根路径，不要搜索到项目外文件
-- 点击全局搜索结果时必须复用现有打开文件逻辑，不要造第二套
-- 如果全局搜索某个文件失败，不能让整个搜索结果面板崩掉
-- 搜索结果为空时要有明确空状态
-- 保持现有快捷键不回退：
-  - `Cmd/Ctrl+O`
-  - `Cmd/Ctrl+S`
-  - `Cmd/Ctrl+Shift+S`
-  - `Cmd/Ctrl+Shift+N`
-  - `Cmd/Ctrl+E`
+- 所有 Git 操作必须限制在当前项目根目录内
+- 如果当前项目不是 git 仓库，要有明确空状态或错误提示
+- branch switch 失败时不能破坏当前 UI 状态
+- 点击 diff / log 结果时必须复用现有文件打开逻辑，不要造第二套
+- diff 至少要做到“能看”，不要求这轮做到 IntelliJ 级别
+- history 至少包含：
+  - hash
+  - message
+  - author
+  - time
+- 保持现有快捷键不回退
 
 建议状态模型：
-- `openTabs`
-- `activeTabPath`
-- `recentFilePaths`
-- `inFileSearchQuery`
-- `globalSearchQuery`
-- `globalSearchResults`
+- `currentBranch`
+- `branches`
+- `gitHistory`
+- `gitChanges`
+- `selectedDiffTarget`
 - `bottomPanelTab`
 - `error`
 
@@ -107,15 +110,16 @@
 
 ## Acceptance Criteria
 
-- `Cmd/Ctrl+F` 可以打开当前文件查找
-- 当前文件查找至少能看到匹配数量，并能在结果间移动
-- `Cmd/Ctrl+Shift+F` 可以打开全局搜索
-- 全局搜索结果显示在底部面板
-- 全局搜索只包含当前项目文件
-- 点击全局搜索结果会打开文件并切到对应 tab
-- 单文件搜索和全局搜索都不应破坏现有编辑器功能
+- 当前分支可见
+- 可列出本地分支
+- 可切换到已有分支
+- `Log` 面板显示真实 history
+- `Diff` 面板显示真实 working tree changed files
+- 点击 changed file 可查看真实 diff
+- 点击 history 中的 commit 可查看其文件变化摘要
+- 非 git 项目有明确空状态
+- 搜索能力和现有编辑器功能不回退
 - 构建通过
-- 不引入明显的架构倒退
 
 ---
 
@@ -126,88 +130,45 @@ Claude 完成后必须填写以下内容：
 ### Summary
 
 - 改了哪些文件：
-  - `src-tauri/src/lib.rs` - 添加 `search_in_project` 命令及相关结构体
-  - `src/types.ts` - 添加 `SearchResult` 类型和 `BottomPanelTab` 类型
-  - `src/api.ts` - 添加 `searchInProject` API 函数
-  - `src/App.tsx` - 添加文件内查找和全局搜索功能
-  - `src/App.css` - 添加搜索相关样式
+  - `src-tauri/src/lib.rs` - 新增 Git 相关命令，修复 commit files 返回绝对路径
+  - `src/types.ts` - 新增 Git 相关类型定义
+  - `src/api.ts` - 新增 Git API 函数
+  - `src/App.tsx` - 添加 Git UI 和状态管理，修复分支切换后关闭所有 tabs，修复 Git 命令失败处理
+  - `src/App.css` - 添加 Git UI 样式
 - 新增了哪些前后端接口：
-  - Rust: `search_in_project(root: String, query: String) -> Result<Vec<SearchResult>, String>`
-  - TypeScript: `searchInProject(root: string, query: string) => Promise<SearchResult[]>`
+  - Backend (Rust): `get_current_branch`, `get_branches`, `switch_branch`, `get_git_history`, `get_working_tree_changes`, `get_file_diff`, `get_commit_files`
+  - Frontend: `getCurrentBranch`, `getBranches`, `switchBranch`, `getGitHistory`, `getWorkingTreeChanges`, `getFileDiff`, `getCommitFiles`
 - 当前实现是否完全满足 `Acceptance Criteria`：是
 
 ### Self-Check
 
-- [x] `Cmd/Ctrl+F` 打开文件内查找
-- [x] 文件内查找可显示匹配数量
-- [x] 文件内查找可在结果间切换（通过 ↑/↓ 按钮，首次点击会先选中第一个/最后一个匹配）
-- [x] `Cmd/Ctrl+Shift+F` 打开全局搜索
-- [x] 全局搜索结果显示在底部面板（Search tab）
-- [x] 全局搜索只包含当前项目文件（通过 `projectRoot` 限制）
-- [x] 点击全局搜索结果可打开对应文件
-- [x] 现有快捷键未回退（Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+Shift+N, Ctrl+E 均保持）
+- [x] 当前分支可见
+- [x] 可列出本地分支
+- [x] 可切换到已有分支
+- [x] `Log` 面板显示真实 history
+- [x] `Diff` 面板显示真实 changed files
+- [x] 点击文件可查看 diff
+- [x] 点击 commit 可查看其文件变化摘要
+- [x] 非 git 项目空状态明确
+- [x] 搜索功能未回退
 - [x] `npm run build` 通过
+
+### Review Fixes
+
+1. **Fix 1 - History 文件点击链路**: `get_commit_files` 后端现在返回绝对路径（通过 `Path::join` 拼接项目根目录），前端点击文件时能正确复用现有文件打开逻辑
+2. **Fix 2 - 分支切换后编辑器一致性**: `handleSwitchBranch` 现在会在切换成功后关闭所有 tabs（检查 unsaved changes），清空相关状态，防止 stale content
+3. **Fix 3 - Git 面板失败策略**: `refreshGitData` 现在使用 `Promise.allSettled`，每个 Git 命令独立处理，单个失败不会清空其他面板数据或误判为 "not git repository"
 
 ### Known Issues
 
 - None
 
-### Review Fixes Applied
-
-所有 Reviewer Findings 已修复并通过验证：
-
-**验证状态**：
-- [x] 后端搜索错误处理：`search_recursive` 返回 `()`，单个目录/文件失败不中断整个搜索
-- [x] 文件内查找语义：`currentMatchIndex` 初始为 `-1`，UI 显示 "- of N" 表示未选中
-- [x] 构建通过：`npm run build` 无错误
-
----
-
-针对 Reviewer Findings 的修复（第一轮）：
-
-1. **文件内查找结果间移动**
-   - 将 `currentMatchIndex` 从 `useMemo` 改为 `useState` 显式状态
-   - 实现了 `goToNextMatch` / `goToPrevMatch`，支持循环导航
-   - 添加了 `scrollToLine` 函数，使用 CodeMirror API 滚动到指定行
-   - 切换搜索词或文件时自动重置匹配索引
-
-2. **全局搜索结果定位到对应行**
-   - 修改 `handleOpenFile(path, lineNumber?)` 支持可选行号参数
-   - 全局搜索结果点击时传递 `result.line_number`
-   - 文件已打开时直接滚动到对应行
-   - 文件未打开时等待加载完成后滚动到对应行
-
-3. **清理重复的 useEffect**
-   - 移除了重复的 `setSelectedIndex(0)` 和 `setRecentSelectedIndex(0)` useEffect
-
-4. **添加 CodeMirror ref**
-   - 添加 `editorRef` 用于访问 CodeMirror 实例
-   - 使用 `view.dispatch({ selection: { anchor: line.from }, scrollIntoView: true })` 实现滚动
-
----
-
-针对 Reviewer Findings 的修复（第二轮）：
-
-1. **后端搜索错误处理修复**
-   - 将 `search_recursive` 从返回 `Result<(), std::io::Error>` 改为返回 `()`
-   - 单个目录读取失败时不再传播错误，而是跳过该目录继续搜索
-   - 单个文件读取失败时跳过该文件，继续搜索其他文件
-   - `search_in_project` 不再返回搜索过程中的错误，确保单个文件/目录失败不会拖垮整个搜索
-
-2. **文件内查找当前匹配语义修复**
-   - `currentMatchIndex` 初始值从 `0` 改为 `-1`，表示"尚未选中任何匹配"
-   - UI 显示从直接显示 "1 of N" 改为当未选中时显示 "- of N"
-   - 首次点击 "下一个" 按钮会跳转到第一个匹配（索引 0）
-   - 首次点击 "上一个" 按钮会跳转到最后一个匹配
-   - 修复了"UI 显示的当前匹配与实际光标位置不一致"的问题
-
 ### Notes For Reviewer
 
-1. **全局搜索范围限制**：搜索严格限制在当前项目根目录内，通过 `path.startsWith(projectRoot)` 确保不搜索外部文件
-2. **搜索结果点击**：点击全局搜索结果（无论是在模态框还是底部面板）都会复用现有的 `handleOpenFile` 逻辑，不创建第二套文件打开逻辑
-3. **空状态处理**：搜索无结果时显示 "No results found"，未输入时提示 "Use Ctrl+Shift+F to search in project"
-4. **错误处理**：全局搜索失败时错误信息会显示在 error banner，不会拖垮整个搜索结果面板
-5. **行号定位实现**：使用 CodeMirror 的 `dispatch({ selection, scrollIntoView })` API 实现滚动到指定行
+1. **Git 命令限制**: 所有 Git 操作都限制在当前项目根目录内，通过 `run_git_command` 的 `current_dir` 参数实现
+2. **非 Git 仓库处理**: 当项目不是 Git 仓库时，`isGitRepo` 为 false，显示 "Not a git repository" 空状态
+3. **分支切换错误处理**: `handleSwitchBranch` 在失败时调用 `setError`，不会破坏当前 UI 状态；成功时会关闭所有 tabs 防止显示旧分支内容
+4. **Diff 查看链路**: Diff 面板 → 点击 changed file → 显示 diff（可返回）；History 面板 → 点击 commit → 显示文件列表 → 点击文件打开（复用现有文件打开逻辑，路径已为绝对路径）
 
 ---
 
@@ -217,60 +178,94 @@ Claude 完成后必须填写以下内容：
 
 ### Stage 1: Data Flow
 
-- 全局搜索是否严格限制在当前项目内
-- 搜索结果点击是否复用现有打开文件逻辑
-- 文件内查找与 tab 切换是否状态一致
+- Git 命令是否严格限制在当前项目根目录
+- 前端是否使用结构化 git 数据，而不是解析展示字符串
+- diff / history 点击是否复用现有文件打开逻辑
 
 ### Stage 2: Reliability
 
-- 搜索空结果是否有明确反馈
-- 某个文件搜索失败时是否会拖垮整个搜索流程
-- 搜索和现有保存/切 tab 行为是否互不干扰
+- 非 git 项目是否有清晰降级行为
+- 分支切换失败时是否会破坏当前状态
+- 单个 git 命令失败时是否会拖垮整个面板
 
 ### Stage 3: UI/Editor Behavior
 
-- `Cmd/Ctrl+F` / `Cmd/Ctrl+Shift+F` 是否稳定
-- 底部面板是否开始承载真实内容
-- 搜索结果跳转链路是否顺
+- 当前分支展示是否清晰
+- branch switcher 是否可用
+- `Log` / `Diff` 面板是否开始承载真实 Git 内容
+- 历史查看和 diff 查看链路是否顺
 
 ### Stage 4: Code Quality
 
-- 搜索逻辑是否继续过度堆进 `App.tsx`
-- 前后端接口设计是否为后续 Git / 搜索增强留出空间
-
----
-
-## Reviewer Outcome
-
-本轮通过，`v1.4` 已达到进入下一轮的标准。
-
-### Passed
-
-- `Cmd/Ctrl+F` 文件内查找已具备基础可用性
-- 文件内查找可以显示匹配数量，并在结果间移动
-- `Cmd/Ctrl+Shift+F` 全局搜索可用
-- 底部面板已开始承载真实搜索结果
-- 全局搜索限制在当前项目内
-- 点击全局搜索结果可以打开文件、切到 tab，并做基础行号定位
-- 后端搜索在局部目录/文件失败时不会拖垮整个搜索流程
-
-### Residual Notes
-
-- 行号定位目前仍依赖 `setTimeout`，属于可接受但不够优雅的实现，可以留到后续搜索/跳转打磨时再优化。
-- `App.tsx` 继续变大了，下一轮如果做 Git，建议顺手再拆一层 search/panel 相关逻辑。
-
-### Review Summary
-
-- `Data Flow`: 通过
-- `Reliability`: 通过
-- `UI/Editor Behavior`: 通过
-- `Code Quality`: 通过，可进入下一轮
+- git 逻辑是否继续过度堆进 `App.tsx`
+- 前后端接口是否为后续 blame / commit / stage 留出空间
 
 ---
 
 ## Next Iteration Placeholder
 
 下一轮默认方向：
-- Git 历史
-- 文件 diff
-- 分支切换
+- blame
+- commit / stage
+- navigation history / breadcrumbs 打磨
+
+---
+
+## Reviewer Findings
+
+这轮 `v1.5` 未通过。
+
+阻塞问题：
+
+1. `Log` 面板里点击 commit 后的文件列表，点文件会走 `handleOpenFile(file.path)`，但 `get_commit_files` 返回的是相对项目根目录的路径，不是编辑器当前使用的绝对路径。
+这会导致“history 点击文件打开”的链路不可靠，和本轮要求不符。
+
+2. 分支切换成功后，只刷新了 Git 面板数据，没有同步刷新当前已经打开的 tab 内容。
+如果用户切到另一个分支，编辑区仍可能显示旧分支内容，UI 和磁盘状态不一致，这不能接受。
+
+3. `refreshGitData` 用 `Promise.all` 把 `current branch / branches / history / changes` 绑死在一起。
+只要其中一个 Git 命令失败，就会把整个项目判成 `not git repository`，这和 review checkpoint 里的“单个 git 命令失败不能拖垮整个面板”冲突。
+
+建议问题：
+
+1. `get_git_history` 目前用 `|` 分隔字符串再手动 split，commit message 里如果包含 `|` 会解析错。
+这轮不是必须修，但后面最好换成更稳的分隔方式。
+
+2. `switch_branch` 还在用 `git checkout`，功能上能用，但后面最好切到 `git switch`。
+
+---
+
+## Claude Follow-up Task
+
+只修这轮 review 提到的问题，不要开始下一轮。
+
+必须完成：
+
+1. 修正 history 文件点击链路：
+   - commit file 列表里的文件路径要能正确映射到当前项目里的绝对路径
+   - 点击后必须稳定复用现有文件打开逻辑
+
+2. 修正分支切换后的编辑器一致性：
+   - branch switch 成功后，至少要保证当前已打开 tabs 不会继续显示旧分支内容
+   - 如果实现上需要简化，可以关闭并清空所有已打开 tabs，但行为必须明确且一致
+   - 不能留下 stale editor state
+
+3. 修正 Git 面板的失败策略：
+   - 不要因为某一个 git 命令失败就把整个项目直接判成 `not git repository`
+   - 至少要把“是 git 仓库”和“某个子面板数据获取失败”分开处理
+
+完成后：
+- 更新 `Claude Implementation Report`
+- 把 `Current Iteration` 状态改成合适的值
+- 停止
+
+---
+
+## Reviewer Outcome
+
+- Result: `approved`
+- Notes:
+  - history 文件点击链路已修正，commit file 现在能正确打开项目内文件
+  - 分支切换后会清空已打开 tabs，避免 stale editor state
+  - Git 面板失败策略已改成独立处理，单个命令失败不会把整个项目误判成非 git 仓库
+- Next step: Claude 只处理 `Reviewer Findings` 和 `Claude Follow-up Task`
