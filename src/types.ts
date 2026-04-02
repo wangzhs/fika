@@ -14,4 +14,6 @@ export interface EditorDocument {
   path: string;
   content: string;
   isDirty: boolean;
+  isLoading: boolean;
+  isSaving: boolean;
 }
