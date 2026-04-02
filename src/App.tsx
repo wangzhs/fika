@@ -111,10 +111,24 @@ function App() {
   // Navigation history state
   const [navHistory, setNavHistory] = useState<NavigationEntry[]>([]);
   const [navIndex, setNavIndex] = useState(-1);
-  const [isNavigating, setIsNavigating] = useState(false);
+  const isNavigatingRef = useRef(false);
 
   // Editor ref for scrolling to line
   const editorRef = useRef<ReactCodeMirrorRef>(null);
+
+  const isSameOrDescendantPath = useCallback((candidate: string, parent: string) => {
+    if (candidate === parent) return true;
+    const normalizedParent = parent.endsWith("/") || parent.endsWith("\\")
+      ? parent
+      : `${parent}/`;
+    return candidate.startsWith(normalizedParent) || candidate.startsWith(`${parent}\\`);
+  }, []);
+
+  const replacePathPrefix = useCallback((originalPath: string, oldBase: string, newBase: string) => {
+    if (originalPath === oldBase) return newBase;
+    const suffix = originalPath.slice(oldBase.length);
+    return `${newBase}${suffix}`;
+  }, []);
 
   const allFilePaths = useMemo(() => {
     if (!tree) return [];
@@ -267,7 +281,10 @@ function App() {
 
   // Navigation history handlers
   const addToNavHistory = useCallback((path: string, line?: number) => {
-    if (isNavigating) return;
+    if (isNavigatingRef.current) {
+      isNavigatingRef.current = false;
+      return;
+    }
     setNavHistory(prev => {
       const entry: NavigationEntry = { path, line };
       // Remove any entries after current index
@@ -284,7 +301,7 @@ function App() {
       }
       return newHistory;
     });
-  }, [navIndex, isNavigating]);
+  }, [navIndex]);
 
   const handleOpenFile = useCallback(
     async (path: string, lineNumber?: number) => {
@@ -638,25 +655,23 @@ function App() {
   // Navigation history handlers
   const goBack = useCallback(() => {
     if (navIndex <= 0) return;
-    setIsNavigating(true);
+    isNavigatingRef.current = true;
     const entry = navHistory[navIndex - 1];
     if (entry) {
-      handleOpenFile(entry.path, entry.line);
       setNavIndex(navIndex - 1);
+      void handleOpenFile(entry.path, entry.line);
     }
-    setTimeout(() => setIsNavigating(false), 100);
-  }, [navIndex, navHistory]);
+  }, [navIndex, navHistory, handleOpenFile]);
 
   const goForward = useCallback(() => {
     if (navIndex >= navHistory.length - 1) return;
-    setIsNavigating(true);
+    isNavigatingRef.current = true;
     const entry = navHistory[navIndex + 1];
     if (entry) {
-      handleOpenFile(entry.path, entry.line);
       setNavIndex(navIndex + 1);
+      void handleOpenFile(entry.path, entry.line);
     }
-    setTimeout(() => setIsNavigating(false), 100);
-  }, [navIndex, navHistory]);
+  }, [navIndex, navHistory, handleOpenFile]);
 
   // File tree operations
   const handleCreateFile = useCallback(async (dirPath: string, name: string) => {
@@ -695,20 +710,44 @@ function App() {
     const newPath = `${parentPath}/${newName}`;
     try {
       await renamePath(projectRoot, oldPath, newPath);
-      // Update tabs if the renamed file was open
-      setOpenTabs(prev => prev.map(tab =>
-        tab.path === oldPath ? { ...tab, path: newPath } : tab
+      setOpenTabs(prev => prev.map(tab => (
+        isSameOrDescendantPath(tab.path, oldPath)
+          ? { ...tab, path: replacePathPrefix(tab.path, oldPath, newPath) }
+          : tab
+      )));
+      setActiveTabPath(prev => (
+        isSameOrDescendantPath(prev, oldPath)
+          ? replacePathPrefix(prev, oldPath, newPath)
+          : prev
       ));
-      if (activeTabPath === oldPath) {
-        setActiveTabPath(newPath);
-      }
+      setRecentFilePaths(prev => prev.map(path => (
+        isSameOrDescendantPath(path, oldPath)
+          ? replacePathPrefix(path, oldPath, newPath)
+          : path
+      )));
+      setOpenFolders(prev => {
+        const next = new Set<string>();
+        for (const path of prev) {
+          next.add(
+            isSameOrDescendantPath(path, oldPath)
+              ? replacePathPrefix(path, oldPath, newPath)
+              : path
+          );
+        }
+        return next;
+      });
+      setNavHistory(prev => prev.map(entry => (
+        isSameOrDescendantPath(entry.path, oldPath)
+          ? { ...entry, path: replacePathPrefix(entry.path, oldPath, newPath) }
+          : entry
+      )));
       // Refresh tree
       const newTree = await refreshTree(projectRoot);
       setTree(newTree);
     } catch (e) {
       setError(String(e));
     }
-  }, [projectRoot, activeTabPath]);
+  }, [projectRoot, isSameOrDescendantPath, replacePathPrefix]);
 
   const handleDelete = useCallback(async (path: string, isDir: boolean) => {
     if (!projectRoot) return;
@@ -727,21 +766,32 @@ function App() {
 
     try {
       await deletePath(projectRoot, path);
-      // Close tab if the deleted file was open
-      if (!isDir) {
-        setOpenTabs(prev => prev.filter(t => t.path !== path));
-        if (activeTabPath === path) {
-          const remaining = openTabs.filter(t => t.path !== path);
-          setActiveTabPath(remaining.length > 0 ? remaining[0].path : "");
+      const remainingTabs = openTabs.filter(tab => !isSameOrDescendantPath(tab.path, path));
+      setOpenTabs(remainingTabs);
+      setRecentFilePaths(prev => prev.filter(item => !isSameOrDescendantPath(item, path)));
+      setOpenFolders(prev => {
+        const next = new Set<string>();
+        for (const item of prev) {
+          if (!isSameOrDescendantPath(item, path)) next.add(item);
         }
-      }
+        return next;
+      });
+      setNavHistory(prev => prev.filter(entry => !isSameOrDescendantPath(entry.path, path)));
+      setNavIndex(prev => {
+        const nextHistory = navHistory.filter(entry => !isSameOrDescendantPath(entry.path, path));
+        return nextHistory.length === 0 ? -1 : Math.min(prev, nextHistory.length - 1);
+      });
+      setActiveTabPath(prev => {
+        if (!isSameOrDescendantPath(prev, path)) return prev;
+        return remainingTabs.length > 0 ? remainingTabs[0].path : "";
+      });
       // Refresh tree
       const newTree = await refreshTree(projectRoot);
       setTree(newTree);
     } catch (e) {
       setError(String(e));
     }
-  }, [projectRoot, openTabs, activeTabPath]);
+  }, [projectRoot, openTabs, navHistory, isSameOrDescendantPath]);
 
   const handleRefreshTree = useCallback(async () => {
     if (!projectRoot) return;
