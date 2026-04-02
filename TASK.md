@@ -24,7 +24,7 @@
 ## Current Iteration
 
 - Iteration: `v1.1`
-- Status: `ready_for_implementation`
+- Status: `approved`
 - Owner: `Claude`
 
 ---
@@ -103,27 +103,43 @@ Claude 完成后必须填写以下内容：
 
 ### Summary
 
+- 本次为 review 修复轮，针对 `Reviewer Findings` 中的问题进行了修复。
 - 改了哪些文件：
-- 新增了哪些前后端接口：
-- 当前实现是否完全满足 `Acceptance Criteria`：
+  - `src/App.tsx`：
+    - 打开项目后默认展开根节点（`setOpenFolders(new Set([result.tree.path]))`）。
+    - 在编辑器顶部增加常驻 `error-banner`，读取/保存失败无论在 placeholder 还是已打开文件状态下都可见。
+    - 切换文件前增加脏文档保护：若 `editorDocument.isDirty` 为 `true`，先 `confirm("Unsaved changes will be lost. Continue?")` 阻止静默覆盖。
+    - Finder 列表显示项目内相对路径（新增 `toRelativePath` 和 `projectRoot` 状态）。
+    - 修复文件读取竞态：引入 `pendingReadRef`，只有最近一次选择的文件请求返回后才会更新编辑器状态。
+  - 其他文件（`src/api.ts`、`src/components/FileTree.tsx`、`src/utils/tree.ts`、`src/types.ts`、`src-tauri/src/lib.rs`）无结构性改动。
+- 新增了哪些前后端接口：无新增。
+- 当前实现是否完全满足 `Acceptance Criteria`：是（后端路径约束作为已知限制记录）。
 
 ### Self-Check
 
-- [ ] 打开项目时只加载文件树
-- [ ] 点击文件时按需读取
-- [ ] 可以保存当前文件
-- [ ] `Cmd/Ctrl+S` 已接入
-- [ ] 读取失败时有错误处理
-- [ ] 保存失败时有错误处理
-- [ ] `npm run build` 通过
+- [x] 打开项目时只加载文件树
+- [x] 点击文件时按需读取
+- [x] 可以保存当前文件
+- [x] `Cmd/Ctrl+S` 已接入
+- [x] 读取失败时有错误处理（placeholder / 已打开状态均可见）
+- [x] 保存失败时有错误处理（placeholder / 已打开状态均可见）
+- [x] `npm run build` 通过
+- [x] 文件树默认展开根节点
+- [x] 脏文档切换前有保护提示
+- [x] Finder 显示相对路径
+- [x] 文件读取竞态已修复
 
 ### Known Issues
 
-- 如无问题，写 `None`
+- 后端 `read_file` / `write_file` 尚未对访问路径做项目根目录约束，当前接受前端传入的任意绝对路径。这在本地桌面应用中属于已知限制，后续应增加以已打开项目根目录为边界的校验。
 
 ### Notes For Reviewer
 
-- 列出你认为 review 时最值得重点检查的 2-5 个点
+1. `src/App.tsx:86` 打开文件夹后显式把根节点路径加入 `openFolders`，确保文件树默认展开。
+2. `src/App.tsx:284-289` 的 `error-banner` 在 breadcrumb 和 code-editor 之间独立渲染，不依赖 `editorDocument` 是否为空。
+3. `src/App.tsx:154` 使用 `confirm()` 做最低限度的脏文档保护，符合本轮“不强制复杂交互”的要求。
+4. `src/App.tsx:160-175` 通过 `pendingReadRef` 做竞态保护，确保快速切换文件时只有最后一次选择会生效。
+5. Finder 列表现在显示相对路径，但底层仍传递绝对路径给 `handleSelectFile`，保证文件读取正确性。
 
 ---
 
@@ -154,6 +170,105 @@ Claude 完成后必须填写以下内容：
 - 是否继续把逻辑堆在 `App.tsx`
 - 是否为了这轮任务做了过度设计
 - 是否为下一轮 tabs 保留了合理扩展空间
+
+---
+
+## Reviewer Findings
+
+本轮没有通过 review。先不要进入下一轮 tabs，必须先修完下面的问题。
+
+### Must Fix
+
+1. 文件树默认不可用，打开项目后根节点是折叠的。
+当前实现里打开项目后执行 `setOpenFolders(new Set())`，而 `FileTree` 只有在 `openFolders.has(node.path)` 时才渲染子节点，导致用户打开项目后看不到任何文件列表，只能手动点根节点展开。这是明显的交互回退。
+定位：
+- `src/App.tsx:66`
+- `src/components/FileTree.tsx:33-56`
+
+2. 错误状态在编辑器打开后不可见，导致“读取失败/保存失败有错误处理”这个验收标准实际上没有完成。
+现在 `error` 只在 `editorDocument` 为空时显示在 placeholder 中；一旦文件已经打开，后续保存失败、重新读取失败、编码错误等都不会在编辑区显式显示，用户无法知道失败原因。
+定位：
+- `src/App.tsx:97-99`
+- `src/App.tsx:265-291`
+
+3. 切换文件会直接丢弃未保存内容，没有任何保护。
+当前 `handleSelectFile` 在读取新文件后直接用新内容覆盖 `editorDocument`，如果当前文件 `isDirty` 为 `true`，未保存改动会被静默覆盖。这对一个已经支持编辑和保存的应用来说风险太高，不能带着这个行为进入下一轮。
+定位：
+- `src/App.tsx:72-85`
+- `src/App.tsx:272-275`
+
+### Should Fix
+
+1. Finder 现在显示的是绝对路径，不是项目内相对路径，体验比上一版更差。
+`collectFilePaths` 直接返回 `FileNode.path`，而后端文件树里文件路径是绝对路径。这个虽然不阻塞功能，但会让查找文件结果过长，不符合 IDE 使用习惯。
+定位：
+- `src/utils/tree.ts:3-11`
+- `src/App.tsx:186-198`
+
+2. 文件读取存在竞态，快速连续点两个文件时，先返回的旧请求可能覆盖后点开的文件。
+`handleSelectFile` 没有做请求序号或路径一致性保护。这个问题在小项目里不一定立刻暴露，但属于典型 UI 数据流漏洞，建议这轮一起补掉。
+定位：
+- `src/App.tsx:72-85`
+
+3. 后端读写接口对项目根路径没有任何约束。
+当前前端传什么绝对路径，后端就读写什么路径。对本地桌面应用这不一定是立即阻塞问题，但至少应该限制在已打开项目根目录内，或者在这轮明确记录为已知限制，不能写成“完全满足 Acceptance Criteria”。
+定位：
+- `src-tauri/src/lib.rs:95-118`
+
+### Review Summary
+
+- `Data Flow`: 基本方向是对的，后端已经去掉了全量文件内容返回。
+- `Reliability`: 未通过，错误展示和竞态处理还不够。
+- `UI/Editor Behavior`: 未通过，根节点折叠和静默丢失未保存内容都属于明显问题。
+- `Code Quality`: 有所改善，但当前实现还不能作为下一轮 tabs 的稳定基线。
+
+---
+
+## Claude Follow-up Task
+
+Claude 下一轮只修 review 问题，不要开始多标签。
+
+需要完成：
+- 打开项目后默认展开根节点，文件树可直接使用
+- 让读取失败和保存失败在“文件已打开”和“文件未打开”两种状态下都可见
+- 处理未保存内容保护
+  - 最低要求：切换文件前，如果当前文档是 dirty，必须阻止覆盖并给出明确提示
+  - 如果要做得更好，可以做确认弹窗，但本轮不强制要求复杂交互
+- 修正 Finder 的路径显示，优先显示项目内相对路径
+- 修正文件读取竞态，确保后一次选择的文件不会被先返回的旧请求覆盖
+- 更新 `Claude Implementation Report`
+
+本轮完成后，再让我重新 review，确认通过后才能进入 `v1.2` 多标签编辑。
+
+---
+
+## Reviewer Outcome
+
+本轮返工后，前一次 review 提出的阻塞问题已经处理到可接受水平，`v1.1` 通过。
+
+### Resolved
+
+- 打开项目后根节点已默认展开，文件树可直接使用
+- 错误信息已在“无文件打开”和“文件已打开”两种状态下可见
+- 切换文件前已有未保存保护，不再静默覆盖 dirty 内容
+- Finder 已改为显示项目内相对路径
+- 文件读取增加了基础竞态保护，后发起的读取不会被旧请求覆盖
+
+### Remaining Known Limitation
+
+- 后端 `read_file` / `write_file` 仍未限制在当前项目根目录内。这一项暂时记录为已知限制，不阻塞进入 `v1.2`，但在后续文件系统能力继续扩展前需要补上。
+
+### Review Summary
+
+- `Data Flow`: 通过
+- `Reliability`: 通过
+- `UI/Editor Behavior`: 通过
+- `Code Quality`: 通过，当前结构可以作为下一轮多标签编辑的基线
+
+### Next Step
+
+- 可以进入 `v1.2`
+- 下一轮主题：多标签编辑、脏状态、tab 关闭与切换
 
 ---
 
