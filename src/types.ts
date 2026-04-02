@@ -17,3 +17,12 @@ export interface EditorDocument {
   isLoading: boolean;
   isSaving: boolean;
 }
+
+export interface SearchResult {
+  path: string;
+  line_number: number;
+  line_content: string;
+  matched_fragment: string;
+}
+
+export type BottomPanelTab = "search" | "diff" | "log" | "blame";

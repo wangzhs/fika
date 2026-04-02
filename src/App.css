@@ -442,3 +442,187 @@ body, html, #root {
   font-weight: 600;
   color: #e0e0e0;
 }
+
+/* In-file Search Bar */
+.infile-search-bar {
+  position: fixed;
+  top: 40px;
+  right: 20px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.infile-search-input {
+  background: #3c3c3c;
+  border: none;
+  outline: none;
+  color: #cccccc;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  width: 200px;
+}
+
+.infile-search-count {
+  color: #a0a0a0;
+  font-size: 12px;
+  min-width: 50px;
+  text-align: center;
+}
+
+.infile-search-btn {
+  background: transparent;
+  border: none;
+  color: #bbbbbb;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.infile-search-btn:hover:not(:disabled) {
+  background: #3c3c3c;
+  color: #ffffff;
+}
+
+.infile-search-btn:disabled {
+  color: #555555;
+  cursor: not-allowed;
+}
+
+.infile-search-btn.close {
+  font-size: 16px;
+  margin-left: 4px;
+}
+
+/* Global Search Modal */
+.global-search-modal {
+  max-height: 500px;
+}
+
+.finder-actions {
+  padding: 8px 14px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #1e1e1e;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.search-btn {
+  background: #0e639c;
+  border: none;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.search-btn:hover:not(:disabled) {
+  background: #1177bb;
+}
+
+.search-btn:disabled {
+  background: #3c3c3c;
+  color: #808080;
+  cursor: not-allowed;
+}
+
+.search-results {
+  max-height: 350px;
+}
+
+.search-result-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.search-result-item:hover,
+.search-result-item.active {
+  background: #094771;
+}
+
+.search-result-path {
+  color: #e0e0e0;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.search-result-content {
+  color: #a0a0a0;
+  font-size: 12px;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Bottom Panel Content */
+.panel-content-area {
+  flex: 1;
+  overflow: auto;
+  background: #1e1e1e;
+}
+
+.search-results-panel {
+  padding: 8px 0;
+  overflow: auto;
+  max-height: 100%;
+}
+
+.search-result-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  cursor: pointer;
+  font-size: 12px;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.search-result-row:hover {
+  background: #2a2d2e;
+}
+
+.search-result-file {
+  color: #e0e0e0;
+  font-weight: 500;
+  min-width: 200px;
+}
+
+.search-result-line {
+  color: #858585;
+  min-width: 50px;
+}
+
+.search-result-text {
+  color: #a0a0a0;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-loading,
+.search-empty {
+  padding: 40px;
+  text-align: center;
+  color: #808080;
+  font-size: 13px;
+}

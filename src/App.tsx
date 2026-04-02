@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import CodeMirror from "@uiw/react-codemirror";
+import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { dracula } from "@uiw/codemirror-theme-dracula";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { css } from "@codemirror/lang-css";
 import "./App.css";
-import type { FileNode, EditorDocument } from "./types";
-import { openFolder, readFile, writeFile } from "./api";
+import type { FileNode, EditorDocument, SearchResult, BottomPanelTab } from "./types";
+import { openFolder, readFile, writeFile, searchInProject } from "./api";
 import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
 import { collectFilePaths } from "./utils/tree";
@@ -56,6 +56,25 @@ function App() {
   const [recentOpen, setRecentOpen] = useState(false);
   const [recentSelectedIndex, setRecentSelectedIndex] = useState(0);
 
+  // In-file search state
+  const [inFileSearchOpen, setInFileSearchOpen] = useState(false);
+  const [inFileQuery, setInFileQuery] = useState("");
+  const inFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Global search state
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [globalSearchResults, setGlobalSearchResults] = useState<SearchResult[]>([]);
+  const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
+  const [globalSelectedIndex, setGlobalSelectedIndex] = useState(0);
+  const globalInputRef = useRef<HTMLInputElement>(null);
+
+  // Bottom panel tab state
+  const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("search");
+
+  // Editor ref for scrolling to line
+  const editorRef = useRef<ReactCodeMirrorRef>(null);
+
   const allFilePaths = useMemo(() => {
     if (!tree) return [];
     return collectFilePaths(tree);
@@ -72,6 +91,28 @@ function App() {
     [openTabs, activeTabPath]
   );
 
+  // In-file search state - current match index tracking (-1 means no selection yet)
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+
+  // In-file search matches
+  const inFileMatches = useMemo(() => {
+    if (!activeTab || !inFileQuery.trim()) return [];
+    const query = inFileQuery.toLowerCase();
+    const lines = activeTab.content.split('\n');
+    const matches: number[] = [];
+    lines.forEach((line, idx) => {
+      if (line.toLowerCase().includes(query)) {
+        matches.push(idx + 1);
+      }
+    });
+    return matches;
+  }, [activeTab, inFileQuery]);
+
+  // Reset current match index when search query or active tab changes
+  useEffect(() => {
+    setCurrentMatchIndex(-1);
+  }, [inFileQuery, activeTabPath]);
+
   const updateRecentFiles = useCallback((path: string) => {
     if (!projectRoot || !path.startsWith(projectRoot)) return;
     setRecentFilePaths((prev) => {
@@ -79,6 +120,67 @@ function App() {
       return [path, ...filtered].slice(0, 20);
     });
   }, [projectRoot]);
+
+  // Scroll to a specific line in the editor
+  const scrollToLine = useCallback((lineNumber: number) => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+
+    try {
+      const doc = view.state.doc;
+      const line = doc.line(Math.min(Math.max(1, lineNumber), doc.lines));
+      if (line) {
+        view.dispatch({
+          selection: { anchor: line.from },
+          scrollIntoView: true,
+        });
+      }
+    } catch {
+      // Ignore errors from invalid line numbers
+    }
+  }, []);
+
+  // In-file search navigation
+  const goToNextMatch = useCallback(() => {
+    if (inFileMatches.length === 0) return;
+    // If no selection yet, select first match (index 0), otherwise go to next
+    const nextIndex = currentMatchIndex === -1 ? 0 : (currentMatchIndex + 1) % inFileMatches.length;
+    setCurrentMatchIndex(nextIndex);
+    scrollToLine(inFileMatches[nextIndex]);
+  }, [inFileMatches, currentMatchIndex, scrollToLine]);
+
+  const goToPrevMatch = useCallback(() => {
+    if (inFileMatches.length === 0) return;
+    // If no selection yet, select last match, otherwise go to previous
+    const prevIndex = currentMatchIndex === -1
+      ? inFileMatches.length - 1
+      : (currentMatchIndex - 1 + inFileMatches.length) % inFileMatches.length;
+    setCurrentMatchIndex(prevIndex);
+    scrollToLine(inFileMatches[prevIndex]);
+  }, [inFileMatches, currentMatchIndex, scrollToLine]);
+
+  // Global search handler
+  const handleGlobalSearch = useCallback(async () => {
+    if (!projectRoot || !globalSearchQuery.trim()) {
+      setGlobalSearchResults([]);
+      return;
+    }
+
+    setGlobalSearchLoading(true);
+    setError(null);
+
+    try {
+      const results = await searchInProject(projectRoot, globalSearchQuery);
+      setGlobalSearchResults(results);
+      setGlobalSelectedIndex(0);
+      setBottomPanelTab("search");
+    } catch (e) {
+      setError(String(e));
+      setGlobalSearchResults([]);
+    } finally {
+      setGlobalSearchLoading(false);
+    }
+  }, [projectRoot, globalSearchQuery]);
 
   const handleOpenFolder = useCallback(async () => {
     if (openTabs.some((t) => t.isDirty)) {
@@ -102,12 +204,16 @@ function App() {
   }, [openTabs]);
 
   const handleOpenFile = useCallback(
-    async (path: string) => {
+    async (path: string, lineNumber?: number) => {
       if (!path) return;
       const existing = openTabs.find((t) => t.path === path);
       if (existing) {
         setActiveTabPath(path);
         updateRecentFiles(path);
+        // If line number specified, scroll to it after a short delay to allow editor to render
+        if (lineNumber !== undefined && lineNumber > 0) {
+          setTimeout(() => scrollToLine(lineNumber), 50);
+        }
         return;
       }
 
@@ -130,6 +236,10 @@ function App() {
           )
         );
         updateRecentFiles(path);
+        // If line number specified, scroll to it after content is loaded
+        if (lineNumber !== undefined && lineNumber > 0) {
+          setTimeout(() => scrollToLine(lineNumber), 100);
+        }
       } catch (e) {
         setError(String(e));
         setOpenTabs((prev) => {
@@ -141,7 +251,7 @@ function App() {
         );
       }
     },
-    [openTabs, activeTabPath, updateRecentFiles]
+    [openTabs, activeTabPath, updateRecentFiles, scrollToLine]
   );
 
   const handleSave = useCallback(async () => {
@@ -257,6 +367,10 @@ function App() {
   }, [recentOpen]);
 
   useEffect(() => {
+    setGlobalSelectedIndex(0);
+  }, [globalSearchQuery]);
+
+  useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const isOpenFolder =
         (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o";
@@ -268,6 +382,55 @@ function App() {
         (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "s";
       const isRecentFiles =
         (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e";
+      const isInFileSearch =
+        (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f";
+      const isGlobalSearch =
+        (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f";
+
+      // Handle Global Search modal keyboard navigation
+      if (globalSearchOpen) {
+        switch (e.key) {
+          case "Escape":
+            e.preventDefault();
+            setGlobalSearchOpen(false);
+            return;
+          case "ArrowDown":
+            e.preventDefault();
+            setGlobalSelectedIndex((i) => Math.min(i + 1, globalSearchResults.length - 1));
+            return;
+          case "ArrowUp":
+            e.preventDefault();
+            setGlobalSelectedIndex((i) => Math.max(i - 1, 0));
+            return;
+          case "Enter":
+            e.preventDefault();
+            if (globalSearchResults[globalSelectedIndex]) {
+              const result = globalSearchResults[globalSelectedIndex];
+              handleOpenFile(result.path, result.line_number);
+              setGlobalSearchOpen(false);
+            }
+            return;
+        }
+      }
+
+      // Handle In-file search
+      if (inFileSearchOpen) {
+        switch (e.key) {
+          case "Escape":
+            e.preventDefault();
+            setInFileSearchOpen(false);
+            return;
+          case "Enter":
+            if (e.shiftKey) {
+              e.preventDefault();
+              goToPrevMatch();
+            } else {
+              e.preventDefault();
+              goToNextMatch();
+            }
+            return;
+        }
+      }
 
       // Handle Recent Files modal keyboard navigation
       if (recentOpen) {
@@ -354,6 +517,22 @@ function App() {
         setRecentSelectedIndex(0);
         return;
       }
+
+      if (isInFileSearch) {
+        e.preventDefault();
+        if (!activeTab) return;
+        setInFileSearchOpen(true);
+        setTimeout(() => inFileInputRef.current?.focus(), 0);
+        return;
+      }
+
+      if (isGlobalSearch) {
+        e.preventDefault();
+        if (!projectRoot) return;
+        setGlobalSearchOpen(true);
+        setTimeout(() => globalInputRef.current?.focus(), 0);
+        return;
+      }
     }
 
     window.addEventListener("keydown", onKeyDown);
@@ -365,11 +544,19 @@ function App() {
     recentOpen,
     recentFilePaths,
     recentSelectedIndex,
+    globalSearchOpen,
+    globalSearchResults,
+    globalSelectedIndex,
+    inFileSearchOpen,
+    activeTab,
+    projectRoot,
     tree,
     handleOpenFolder,
     handleSave,
     handleSaveAll,
     handleOpenFile,
+    goToNextMatch,
+    goToPrevMatch,
   ]);
 
   return (
@@ -433,6 +620,108 @@ function App() {
                   </span>
                 </div>
               ))}
+            </div>
+            <div className="finder-hint">
+              <span>↑↓</span> navigate <span>↵</span> open <span>esc</span> close
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-file Search Bar */}
+      {inFileSearchOpen && activeTab && (
+        <div className="infile-search-bar">
+          <input
+            ref={inFileInputRef}
+            className="infile-search-input"
+            placeholder="Find in file..."
+            value={inFileQuery}
+            onChange={(e) => setInFileQuery(e.target.value)}
+          />
+          <span className="infile-search-count">
+            {inFileMatches.length > 0
+              ? currentMatchIndex === -1
+                ? `- of ${inFileMatches.length}`
+                : `${currentMatchIndex + 1} of ${inFileMatches.length}`
+              : inFileQuery ? "0 of 0" : ""}
+          </span>
+          <button
+            className="infile-search-btn"
+            onClick={goToPrevMatch}
+            disabled={inFileMatches.length === 0}
+            title="Previous match (Shift+Enter)"
+          >
+            ↑
+          </button>
+          <button
+            className="infile-search-btn"
+            onClick={goToNextMatch}
+            disabled={inFileMatches.length === 0}
+            title="Next match (Enter)"
+          >
+            ↓
+          </button>
+          <button
+            className="infile-search-btn close"
+            onClick={() => setInFileSearchOpen(false)}
+            title="Close (Esc)"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Global Search Modal */}
+      {globalSearchOpen && (
+        <div className="finder-overlay" onClick={() => setGlobalSearchOpen(false)}>
+          <div className="finder-modal global-search-modal" onClick={(e) => e.stopPropagation()}>
+            <input
+              ref={globalInputRef}
+              className="finder-input"
+              placeholder="Search in project... (Ctrl+Shift+F)"
+              value={globalSearchQuery}
+              onChange={(e) => setGlobalSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleGlobalSearch();
+                }
+              }}
+            />
+            <div className="finder-actions">
+              <button
+                className="search-btn"
+                onClick={handleGlobalSearch}
+                disabled={globalSearchLoading || !globalSearchQuery.trim()}
+              >
+                {globalSearchLoading ? "Searching..." : "Search"}
+              </button>
+            </div>
+            <div className="finder-list search-results">
+              {globalSearchResults.length > 0 ? (
+                globalSearchResults.map((result, idx) => (
+                  <div
+                    key={`${result.path}:${result.line_number}`}
+                    className={`search-result-item ${idx === globalSelectedIndex ? "active" : ""}`}
+                    onMouseEnter={() => setGlobalSelectedIndex(idx)}
+                    onClick={() => {
+                      handleOpenFile(result.path, result.line_number);
+                      setGlobalSearchOpen(false);
+                    }}
+                  >
+                    <div className="search-result-path">
+                      {toRelativePath(projectRoot, result.path)}:{result.line_number}
+                    </div>
+                    <div className="search-result-content">
+                      {result.matched_fragment}
+                    </div>
+                  </div>
+                ))
+              ) : globalSearchQuery && !globalSearchLoading ? (
+                <div className="finder-empty">
+                  {globalSearchResults.length === 0 ? "No results found" : ""}
+                </div>
+              ) : null}
             </div>
             <div className="finder-hint">
               <span>↑↓</span> navigate <span>↵</span> open <span>esc</span> close
@@ -525,6 +814,7 @@ function App() {
           <div className="code-editor">
             {activeTab ? (
               <CodeMirror
+                ref={editorRef}
                 value={activeTab.content}
                 height="100%"
                 theme={dracula}
@@ -560,14 +850,78 @@ function App() {
 
       <footer className="bottom-panel">
         <div className="panel-header tabs">
-          <button>Diff</button>
-          <button>Log</button>
-          <button>Blame</button>
+          <button
+            className={bottomPanelTab === "search" ? "active" : ""}
+            onClick={() => setBottomPanelTab("search")}
+          >
+            Search
+          </button>
+          <button
+            className={bottomPanelTab === "diff" ? "active" : ""}
+            onClick={() => setBottomPanelTab("diff")}
+          >
+            Diff
+          </button>
+          <button
+            className={bottomPanelTab === "log" ? "active" : ""}
+            onClick={() => setBottomPanelTab("log")}
+          >
+            Log
+          </button>
+          <button
+            className={bottomPanelTab === "blame" ? "active" : ""}
+            onClick={() => setBottomPanelTab("blame")}
+          >
+            Blame
+          </button>
         </div>
-        <div className="diff-content">
-          <div className="diff-hunk">
-            <div className="diff-line ctx">Git integration coming soon</div>
-          </div>
+        <div className="panel-content-area">
+          {bottomPanelTab === "search" && (
+            <div className="search-results-panel">
+              {globalSearchLoading ? (
+                <div className="search-loading">Searching...</div>
+              ) : globalSearchResults.length > 0 ? (
+                globalSearchResults.map((result) => (
+                  <div
+                    key={`${result.path}:${result.line_number}`}
+                    className="search-result-row"
+                    onClick={() => handleOpenFile(result.path, result.line_number)}
+                  >
+                    <span className="search-result-file">{toRelativePath(projectRoot, result.path)}</span>
+                    <span className="search-result-line">:{result.line_number}</span>
+                    <span className="search-result-text">{result.matched_fragment}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="search-empty">
+                  {globalSearchQuery
+                    ? "No results found"
+                    : "Use Ctrl+Shift+F to search in project"}
+                </div>
+              )}
+            </div>
+          )}
+          {bottomPanelTab === "diff" && (
+            <div className="diff-content">
+              <div className="diff-hunk">
+                <div className="diff-line ctx">Git integration coming soon</div>
+              </div>
+            </div>
+          )}
+          {bottomPanelTab === "log" && (
+            <div className="diff-content">
+              <div className="diff-hunk">
+                <div className="diff-line ctx">Git log will appear here</div>
+              </div>
+            </div>
+          )}
+          {bottomPanelTab === "blame" && (
+            <div className="diff-content">
+              <div className="diff-hunk">
+                <div className="diff-line ctx">Git blame will appear here</div>
+              </div>
+            </div>
+          )}
         </div>
       </footer>
     </div>
