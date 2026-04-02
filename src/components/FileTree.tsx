@@ -7,6 +7,7 @@ interface FileTreeProps {
   toggleFolder: (p: string) => void;
   selectedFile: string;
   onSelectFile: (path: string) => void;
+  onContextMenu?: (path: string, isDir: boolean, e: React.MouseEvent) => void;
 }
 
 export function FileTree({
@@ -16,6 +17,7 @@ export function FileTree({
   toggleFolder,
   selectedFile,
   onSelectFile,
+  onContextMenu,
 }: FileTreeProps) {
   if (!node.is_dir) {
     return (
@@ -23,6 +25,7 @@ export function FileTree({
         className={`tree-file ${selectedFile === node.path ? "active" : ""}`}
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => onSelectFile(node.path)}
+        onContextMenu={(e) => onContextMenu?.(node.path, false, e)}
       >
         <span className="tree-icon file">📝</span>
         <span className="tree-label">{node.name}</span>
@@ -37,6 +40,7 @@ export function FileTree({
         className="tree-folder"
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => toggleFolder(node.path)}
+        onContextMenu={(e) => onContextMenu?.(node.path, true, e)}
       >
         <span className="tree-chevron">{isOpen ? "▼" : "▶"}</span>
         <span className="tree-icon folder">{isOpen ? "📂" : "📁"}</span>
@@ -52,6 +56,7 @@ export function FileTree({
             toggleFolder={toggleFolder}
             selectedFile={selectedFile}
             onSelectFile={onSelectFile}
+            onContextMenu={onContextMenu}
           />
         ))}
     </>

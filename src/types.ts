@@ -71,3 +71,44 @@ export interface CommitFiles {
   hash: string;
   files: ChangedFile[];
 }
+
+// Blame types
+export interface BlameLine {
+  line_number: number;
+  content: string;
+  commit_hash: string;
+  short_hash: string;
+  author: string;
+  time: string;
+}
+
+export interface FileBlame {
+  path: string;
+  lines: BlameLine[];
+}
+
+// Stage types
+export interface StagedFile {
+  path: string;
+  status: string;
+}
+
+// Persistence types
+export interface RecentProject {
+  path: string;
+  name: string;
+  last_opened: number;
+}
+
+export interface SessionState {
+  project_root: string | null;
+  open_tabs: string[];
+  active_tab_path: string;
+  open_folders: string[];
+}
+
+// Navigation history
+export interface NavigationEntry {
+  path: string;
+  line?: number;
+}

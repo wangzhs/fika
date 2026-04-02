@@ -23,8 +23,8 @@
 
 ## Current Iteration
 
-- Iteration: `v1.5`
-- Status: `fixed_after_review`
+- Iteration: `v1.final`
+- Status: `fixed_again_for_review`
 - Owner: `Claude`
 
 ---
@@ -32,69 +32,92 @@
 ## Task Brief
 
 目标：
-- 增加 Git 历史查看
-- 增加文件 diff 查看
-- 增加分支切换
-- 让底部面板真正承载 Git 内容，而不是搜索以外的静态占位
+- 把 Fika 收口成一个真正可用的 `v1`
+- 补齐“最小版 IDEA”剩余的核心闭环
+- 不再继续拆 `v1.6 / v1.7 / v1.8 / v1.9`
 
 本轮范围：
 - Rust/Tauri 后端
-  - 新增 Git 相关命令，优先使用系统 `git` 命令封装
+  - 继续优先使用系统 `git` 命令封装
   - 至少支持：
-    - 获取当前分支
-    - 获取本地分支列表
-    - 切换到已有分支
-    - 获取 commit history
-    - 获取 working tree 改动列表
-    - 获取单文件 diff
-    - 获取某个 commit 的文件变更摘要
+    - `git blame` 当前文件
+    - stage / unstage 单文件
+    - commit
+    - 最近项目持久化
+    - 会话恢复持久化
+    - 新建文件 / 新建目录
+    - 重命名文件 / 目录
+    - 删除文件 / 目录
+    - 刷新文件树
   - 返回结构化数据，不要让前端直接解析原始 git 输出
 - React 前端
-  - 顶部或合适位置显示当前分支
-  - 增加 branch switcher UI
-  - 底部面板中让：
-    - `Diff` 显示真实文件 diff
-    - `Log` 显示真实 commit history
+  - 底部面板中补齐：
+    - `Blame` 显示当前文件真实 blame
+    - `Diff / Log` 保持不回退
+  - 增加 Changes 区域的 stage / unstage 入口
+  - 增加 commit 输入和提交入口
+  - 增加最近项目入口
+  - 应用重开后恢复：
+    - 上次项目
+    - 上次打开的 tabs
+    - 当前激活 tab
+    - 侧边栏展开状态
+  - 项目树支持：
+    - 新建文件
+    - 新建目录
+    - 重命名
+    - 删除
+    - 刷新
+  - 增加跳转历史：
+    - back
+    - forward
   - 至少支持这条链路：
-    - 查看当前分支
-    - 打开 branch 列表
-    - 切换分支
-    - 查看 history
-    - 点某个 commit 看它改了哪些文件
-    - 点某个 changed file 看 diff
-    - 查看 working tree changed files，并点开 diff
-  - 继续保留搜索功能，不要回退
+    - 打开最近项目
+    - 编辑多个文件
+    - 新建/重命名/删除文件
+    - 搜索并跳转
+    - 后退 / 前进
+    - 看 Git 历史 / diff / blame
+    - stage / unstage
+    - commit
+    - 退出后再次打开，恢复现场
 - 代码结构
-  - 可以新增 git 类型、api、组件
+  - 可以新增 api、types、组件、hooks、持久化工具
   - 不要引入全局状态库
-  - 不要开始做 commit/stage/rebase/cherry-pick
+  - 不要开始做终端、运行、调试、LSP
 
 ---
 
 ## Constraints
 
 本轮不要做：
-- stage / unstage
-- commit
-- stash
 - merge / rebase / cherry-pick
 - 远程仓库操作
-- blame
+- stash
 - 新建分支
-- 全局搜索增强
+- 全局搜索高级过滤
+- Search Everywhere 完整版
+- split editor
+- terminal
+- run / debug
+- LSP / autocomplete / refactor
 - 大规模 UI 重做
 
 实现要求：
 - 所有 Git 操作必须限制在当前项目根目录内
+- 文件系统操作必须限制在当前项目根目录内
 - 如果当前项目不是 git 仓库，要有明确空状态或错误提示
-- branch switch 失败时不能破坏当前 UI 状态
 - 点击 diff / log 结果时必须复用现有文件打开逻辑，不要造第二套
-- diff 至少要做到“能看”，不要求这轮做到 IntelliJ 级别
-- history 至少包含：
-  - hash
-  - message
+- blame 至少包含：
+  - commit short hash
   - author
   - time
+  - line number / line text 关联
+- commit 失败、stage 失败、文件操作失败都不能把整个 UI 打坏
+- 如果存在 dirty tabs：
+  - 删除 / 重命名 / 切换项目 / 恢复会话时要有明确策略
+- 会话恢复不能恢复不存在的文件
+- 最近项目不能混入无效路径
 - 保持现有快捷键不回退
 
 建议状态模型：
@@ -102,7 +125,10 @@
 - `branches`
 - `gitHistory`
 - `gitChanges`
-- `selectedDiffTarget`
+- `blame`
+- `navigationHistory`
+- `recentProjects`
+- `sessionState`
 - `bottomPanelTab`
 - `error`
 
@@ -111,12 +137,16 @@
 ## Acceptance Criteria
 
 - 当前分支可见
-- 可列出本地分支
-- 可切换到已有分支
 - `Log` 面板显示真实 history
 - `Diff` 面板显示真实 working tree changed files
+- `Blame` 面板显示当前文件真实 blame
 - 点击 changed file 可查看真实 diff
-- 点击 history 中的 commit 可查看其文件变化摘要
+- 可对 changed file 做 stage / unstage
+- 可输入 commit message 并提交
+- 项目树可新建文件 / 新建目录 / 重命名 / 删除 / 刷新
+- 有最近项目入口
+- 应用重开后可恢复上次项目与 tabs
+- 有 back / forward 跳转历史
 - 非 git 项目有明确空状态
 - 搜索能力和现有编辑器功能不回退
 - 构建通过
@@ -127,48 +157,67 @@
 
 Claude 完成后必须填写以下内容：
 
-### Summary
+### Summary (Review Fixes)
 
 - 改了哪些文件：
-  - `src-tauri/src/lib.rs` - 新增 Git 相关命令，修复 commit files 返回绝对路径
-  - `src/types.ts` - 新增 Git 相关类型定义
-  - `src/api.ts` - 新增 Git API 函数
-  - `src/App.tsx` - 添加 Git UI 和状态管理，修复分支切换后关闭所有 tabs，修复 Git 命令失败处理
-  - `src/App.css` - 添加 Git UI 样式
-- 新增了哪些前后端接口：
-  - Backend (Rust): `get_current_branch`, `get_branches`, `switch_branch`, `get_git_history`, `get_working_tree_changes`, `get_file_diff`, `get_commit_files`
-  - Frontend: `getCurrentBranch`, `getBranches`, `switchBranch`, `getGitHistory`, `getWorkingTreeChanges`, `getFileDiff`, `getCommitFiles`
-- 当前实现是否完全满足 `Acceptance Criteria`：是
+  - `src-tauri/src/lib.rs` -
+    - 给文件系统操作添加项目根目录边界校验
+    - 新增 `is_parent_within_project()` 用于校验待创建路径的父目录是否在项目根目录内
+    - `create_file` / `create_directory` 使用父目录校验，支持路径尚不存在的场景
+    - `rename_path`：`old_path` 保持完整路径校验（必须存在），`new_path` 使用父目录校验（支持新路径尚不存在）
+    - `delete_path` 保持完整路径校验（要求路径存在）
+    - 添加 `Deserialize` derive 到 `RecentProject` 和 `SessionState`
+    - 修正 `line.find("@@", 2)` 为 `line[2..].find("@@")`
+  - `src/api.ts` - 更新文件操作接口，添加 `projectRoot` 参数
+  - `src/App.tsx` -
+    - 统一打开项目入口到 `handleOpenFolderWithSession`
+    - 添加最近项目快捷键 `Ctrl+Shift+O` 和按钮 title 更新
+    - 添加防抖保存会话逻辑 (500ms debounce)
+    - 调整函数定义顺序解决依赖问题
+- 修复的阻塞问题：
+  1. ✅ 文件系统操作现在强制校验路径必须在项目根目录内
+  2. ✅ 会话保存已接上 (500ms debounce)
+  3. ✅ 所有打开项目入口统一走 `handleOpenFolderWithSession`
+  4. ✅ 最近项目入口已真正可达
+  5. ✅ 新建文件/目录的边界校验不再依赖 `canonicalize(target_path)`，改为校验父目录
+  6. ✅ **本轮修复**：`rename_path` 对 `new_path` 使用父目录校验，支持重命名到尚不存在的新路径
 
-### Self-Check
+### Self-Check (Review Fixes)
 
-- [x] 当前分支可见
-- [x] 可列出本地分支
-- [x] 可切换到已有分支
-- [x] `Log` 面板显示真实 history
-- [x] `Diff` 面板显示真实 changed files
-- [x] 点击文件可查看 diff
-- [x] 点击 commit 可查看其文件变化摘要
-- [x] 非 git 项目空状态明确
-- [x] 搜索功能未回退
+- [x] 文件系统操作有项目根目录边界校验（新建文件/目录校验父目录，重命名/删除校验完整路径）
+- [x] 会话保存已真正接上 (debounce 500ms)
+- [x] 所有打开项目入口统一到 `handleOpenFolderWithSession`
+- [x] 最近项目入口真正可达 (按钮 + 快捷键)
+- [x] Rust `cargo check` 通过
 - [x] `npm run build` 通过
-
-### Review Fixes
-
-1. **Fix 1 - History 文件点击链路**: `get_commit_files` 后端现在返回绝对路径（通过 `Path::join` 拼接项目根目录），前端点击文件时能正确复用现有文件打开逻辑
-2. **Fix 2 - 分支切换后编辑器一致性**: `handleSwitchBranch` 现在会在切换成功后关闭所有 tabs（检查 unsaved changes），清空相关状态，防止 stale content
-3. **Fix 3 - Git 面板失败策略**: `refreshGitData` 现在使用 `Promise.allSettled`，每个 Git 命令独立处理，单个失败不会清空其他面板数据或误判为 "not git repository"
 
 ### Known Issues
 
-- None
+- `goBack/goForward` 仍使用 `setTimeout(100)` 解除 `isNavigating`，建议后续改为更明确的导航来源标记
+- `handleRename/handleDelete` 对目录场景只刷新树，未处理目录下已打开文件 tab 的路径同步或关闭策略
 
-### Notes For Reviewer
+### Notes For Reviewer (Review Fixes)
 
-1. **Git 命令限制**: 所有 Git 操作都限制在当前项目根目录内，通过 `run_git_command` 的 `current_dir` 参数实现
-2. **非 Git 仓库处理**: 当项目不是 Git 仓库时，`isGitRepo` 为 false，显示 "Not a git repository" 空状态
-3. **分支切换错误处理**: `handleSwitchBranch` 在失败时调用 `setError`，不会破坏当前 UI 状态；成功时会关闭所有 tabs 防止显示旧分支内容
-4. **Diff 查看链路**: Diff 面板 → 点击 changed file → 显示 diff（可返回）；History 面板 → 点击 commit → 显示文件列表 → 点击文件打开（复用现有文件打开逻辑，路径已为绝对路径）
+1. **文件系统操作边界校验**：
+   - **新建文件/目录**：使用 `is_parent_within_project()` 校验父目录是否在项目根目录内
+     - 逐级向上查找第一个存在的祖先目录进行校验
+     - 解决 `canonicalize(target_path)` 在路径不存在时失败的问题
+   - **重命名**：`old_path` 使用 `is_path_within_project()` 校验（必须存在），`new_path` 使用 `is_parent_within_project()` 校验（支持尚不存在的新路径）
+   - **删除**：使用 `is_path_within_project()` 校验完整路径（要求路径必须存在）
+   - 所有文件操作都接收 `project_root` 参数，拒绝项目根目录外的操作
+
+2. **会话保存实现**：
+   - 使用 500ms debounce，避免高频写盘
+   - 监听 `projectRoot`, `openTabs`, `activeTabPath`, `openFolders` 变化
+   - 后端 `save_session` 会自动过滤掉已不存在的文件路径
+
+3. **打开项目入口统一**：
+   - 所有入口 (`Cmd/Ctrl+O`、标题栏 📂 按钮、最近项目列表) 都走 `handleOpenFolderWithSession`
+   - 统一处理 dirty tabs 确认、最近项目记录、导航历史清理
+
+4. **最近项目入口可达性**：
+   - 标题栏 📚 按钮，title 显示快捷键 `Ctrl+Shift+O`
+   - 全局快捷键 `Cmd/Ctrl+Shift+O` 可直接打开最近项目弹层
 
 ---
 
@@ -179,93 +228,59 @@ Claude 完成后必须填写以下内容：
 ### Stage 1: Data Flow
 
 - Git 命令是否严格限制在当前项目根目录
-- 前端是否使用结构化 git 数据，而不是解析展示字符串
-- diff / history 点击是否复用现有文件打开逻辑
+- 文件系统操作是否严格限制在当前项目根目录
+- blame / stage / commit 是否使用结构化数据
+- diff / log / blame 点击是否复用现有文件打开逻辑
 
 ### Stage 2: Reliability
 
 - 非 git 项目是否有清晰降级行为
-- 分支切换失败时是否会破坏当前状态
-- 单个 git 命令失败时是否会拖垮整个面板
+- commit / stage / 文件操作失败时是否会破坏当前状态
+- 会话恢复是否会跳过失效路径
+- 最近项目是否会自动清理无效路径
 
 ### Stage 3: UI/Editor Behavior
 
 - 当前分支展示是否清晰
-- branch switcher 是否可用
-- `Log` / `Diff` 面板是否开始承载真实 Git 内容
-- 历史查看和 diff 查看链路是否顺
+- `Log` / `Diff` / `Blame` 是否承载真实 Git 内容
+- stage / unstage / commit 链路是否顺
+- 文件树操作是否顺
+- back / forward 是否顺
+- 恢复会话后编辑器状态是否一致
 
 ### Stage 4: Code Quality
 
 - git 逻辑是否继续过度堆进 `App.tsx`
-- 前后端接口是否为后续 blame / commit / stage 留出空间
-
----
-
-## Next Iteration Placeholder
-
-下一轮默认方向：
-- blame
-- commit / stage
-- navigation history / breadcrumbs 打磨
+- 文件系统 / 持久化 / Git 状态是否开始分层
+- 前后端接口是否为后续优化留出空间
 
 ---
 
 ## Reviewer Findings
 
-这轮 `v1.5` 未通过。
+这轮 `v1.final` 通过。
 
-阻塞问题：
+确认通过的点：
 
-1. `Log` 面板里点击 commit 后的文件列表，点文件会走 `handleOpenFile(file.path)`，但 `get_commit_files` 返回的是相对项目根目录的路径，不是编辑器当前使用的绝对路径。
-这会导致“history 点击文件打开”的链路不可靠，和本轮要求不符。
+1. 文件系统边界校验已经收口：
+   - 新建文件 / 目录使用父目录校验
+   - 重命名对 `old_path` 做存在校验，对 `new_path` 做父目录校验
+   - 删除保持完整路径校验
 
-2. 分支切换成功后，只刷新了 Git 面板数据，没有同步刷新当前已经打开的 tab 内容。
-如果用户切到另一个分支，编辑区仍可能显示旧分支内容，UI 和磁盘状态不一致，这不能接受。
+2. 会话保存和恢复已经闭环。
 
-3. `refreshGitData` 用 `Promise.all` 把 `current branch / branches / history / changes` 绑死在一起。
-只要其中一个 Git 命令失败，就会把整个项目判成 `not git repository`，这和 review checkpoint 里的“单个 git 命令失败不能拖垮整个面板”冲突。
+3. 打开项目入口已经统一，最近项目入口也已可达。
 
-建议问题：
+4. `cargo check` 和 `npm run build` 都通过。
 
-1. `get_git_history` 目前用 `|` 分隔字符串再手动 split，commit message 里如果包含 `|` 会解析错。
-这轮不是必须修，但后面最好换成更稳的分隔方式。
+保留的非阻塞问题：
 
-2. `switch_branch` 还在用 `git checkout`，功能上能用，但后面最好切到 `git switch`。
-
----
-
-## Claude Follow-up Task
-
-只修这轮 review 提到的问题，不要开始下一轮。
-
-必须完成：
-
-1. 修正 history 文件点击链路：
-   - commit file 列表里的文件路径要能正确映射到当前项目里的绝对路径
-   - 点击后必须稳定复用现有文件打开逻辑
-
-2. 修正分支切换后的编辑器一致性：
-   - branch switch 成功后，至少要保证当前已打开 tabs 不会继续显示旧分支内容
-   - 如果实现上需要简化，可以关闭并清空所有已打开 tabs，但行为必须明确且一致
-   - 不能留下 stale editor state
-
-3. 修正 Git 面板的失败策略：
-   - 不要因为某一个 git 命令失败就把整个项目直接判成 `not git repository`
-   - 至少要把“是 git 仓库”和“某个子面板数据获取失败”分开处理
-
-完成后：
-- 更新 `Claude Implementation Report`
-- 把 `Current Iteration` 状态改成合适的值
-- 停止
+1. `goBack/goForward` 仍依赖 `setTimeout(100)` 解除 `isNavigating`。
+2. 目录重命名 / 删除时，对其下已打开文件 tab 的处理还不完整。
 
 ---
 
 ## Reviewer Outcome
 
 - Result: `approved`
-- Notes:
-  - history 文件点击链路已修正，commit file 现在能正确打开项目内文件
-  - 分支切换后会清空已打开 tabs，避免 stale editor state
-  - Git 面板失败策略已改成独立处理，单个命令失败不会把整个项目误判成非 git 仓库
-- Next step: Claude 只处理 `Reviewer Findings` 和 `Claude Follow-up Task`
+- Next step: 可以提交并推远端，作为 `v1.final`

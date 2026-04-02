@@ -864,3 +864,225 @@ body, html, #root {
   color: #79c0ff;
   font-size: 12px;
 }
+
+/* Changes Section */
+.changes-section {
+  margin-bottom: 16px;
+}
+
+.changes-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: #252526;
+  border-bottom: 1px solid #1e1e1e;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.changes-empty {
+  padding: 16px;
+  text-align: center;
+  color: #808080;
+  font-size: 12px;
+}
+
+.action-btn {
+  background: #0e639c;
+  border: none;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+}
+
+.action-btn:hover:not(:disabled) {
+  background: #1177bb;
+}
+
+.action-btn:disabled {
+  background: #3c3c3c;
+  color: #808080;
+  cursor: not-allowed;
+}
+
+.action-btn-sm {
+  background: #3c3c3c;
+  border: 1px solid #5c5c5c;
+  color: #cccccc;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  min-width: 24px;
+}
+
+.action-btn-sm:hover {
+  background: #4c4c4c;
+}
+
+/* Commit Section */
+.commit-section {
+  padding: 12px 16px;
+  border-top: 1px solid #1e1e1e;
+  display: flex;
+  gap: 8px;
+}
+
+.commit-input {
+  flex: 1;
+  background: #3c3c3c;
+  border: 1px solid #5c5c5c;
+  color: #cccccc;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 3px;
+  outline: none;
+}
+
+.commit-input:focus {
+  border-color: #007acc;
+}
+
+.commit-btn {
+  background: #238636;
+  border: none;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.commit-btn:hover:not(:disabled) {
+  background: #2ea043;
+}
+
+.commit-btn:disabled {
+  background: #3c3c3c;
+  color: #808080;
+  cursor: not-allowed;
+}
+
+/* Blame View */
+.blame-view {
+  padding: 8px 0;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.blame-line {
+  display: flex;
+  align-items: center;
+  padding: 2px 16px;
+  white-space: pre;
+  gap: 12px;
+}
+
+.blame-line:hover {
+  background: #2a2d2e;
+}
+
+.blame-hash {
+  color: #79c0ff;
+  min-width: 70px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.blame-author {
+  color: #a0a0a0;
+  min-width: 100px;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blame-time {
+  color: #858585;
+  min-width: 60px;
+  font-size: 11px;
+}
+
+.blame-line-num {
+  color: #858585;
+  min-width: 40px;
+  text-align: right;
+  font-size: 11px;
+}
+
+.blame-content {
+  color: #d4d4d4;
+  flex: 1;
+}
+
+/* Context Menu */
+.context-menu {
+  position: fixed;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  min-width: 160px;
+  padding: 4px 0;
+}
+
+.context-menu-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #cccccc;
+}
+
+.context-menu-item:hover {
+  background: #094771;
+  color: #ffffff;
+}
+
+.context-menu-item-danger {
+  color: #f48771;
+}
+
+.context-menu-item-danger:hover {
+  background: #5c2a2a;
+  color: #f48771;
+}
+
+.context-menu-divider {
+  height: 1px;
+  background: #3c3c3c;
+  margin: 4px 0;
+}
+
+/* Navigation Buttons */
+.icon-btn:disabled {
+  color: #555555;
+  cursor: not-allowed;
+}
+
+.icon-btn:disabled:hover {
+  background: transparent;
+  color: #555555;
+}
+
+/* Finder Actions */
+.finder-actions {
+  padding: 8px 14px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #1e1e1e;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Panel Header with actions */
+.panel-header {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+}

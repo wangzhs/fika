@@ -6,11 +6,14 @@ import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { css } from "@codemirror/lang-css";
 import "./App.css";
-import type { Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab } from "./types";
+import type { Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab, FileBlame, StagedFile, RecentProject, NavigationEntry } from "./types";
 import {
   openFolder, readFile, writeFile, searchInProject,
   getCurrentBranch, getBranches, switchBranch,
-  getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles
+  getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles,
+  getFileBlame, stageFile, unstageFile, commit, getStagedFiles,
+  createFile, createDirectory, renamePath, deletePath, refreshTree,
+  saveRecentProjects, loadRecentProjects, saveSession, loadSession
 } from "./api";
 import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
@@ -87,6 +90,28 @@ function App() {
   const [fileDiff, setFileDiff] = useState<FileDiff | null>(null);
   const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false);
   const [isGitRepo, setIsGitRepo] = useState(false);
+
+  // Git blame state
+  const [fileBlame, setFileBlame] = useState<FileBlame | null>(null);
+
+  // Git staging/commit state
+  const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
+  const [commitMessage, setCommitMessage] = useState("");
+  const [isCommitting, setIsCommitting] = useState(false);
+
+  // Persistence state
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [recentProjectsOpen, setRecentProjectsOpen] = useState(false);
+
+  // File tree context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
+  const [renameModal, setRenameModal] = useState<{ path: string; isDir: boolean; newName: string } | null>(null);
+  const [newFileModal, setNewFileModal] = useState<{ dirPath: string; name: string; isDir: boolean } | null>(null);
+
+  // Navigation history state
+  const [navHistory, setNavHistory] = useState<NavigationEntry[]>([]);
+  const [navIndex, setNavIndex] = useState(-1);
+  const [isNavigating, setIsNavigating] = useState(false);
 
   // Editor ref for scrolling to line
   const editorRef = useRef<ReactCodeMirrorRef>(null);
@@ -198,14 +223,26 @@ function App() {
     }
   }, [projectRoot, globalSearchQuery]);
 
-  const handleOpenFolder = useCallback(async () => {
+  // Add a project to recent projects list
+  const addRecentProject = useCallback((rootPath: string) => {
+    const name = rootPath.split(/[\/\\]/).pop() || rootPath;
+    setRecentProjects(prev => {
+      const filtered = prev.filter(p => p.path !== rootPath);
+      const updated = [{ path: rootPath, name, last_opened: Date.now() }, ...filtered].slice(0, 10);
+      saveRecentProjects(updated).catch(() => {});
+      return updated;
+    });
+  }, []);
+
+  // Modified handleOpenFolder to support recent projects
+  const handleOpenFolderWithSession = useCallback(async (targetPath?: string) => {
     if (openTabs.some((t) => t.isDirty)) {
       const ok = confirm("Unsaved changes will be lost. Open new folder?");
       if (!ok) return;
     }
     try {
       setError(null);
-      const result = await openFolder();
+      const result = targetPath ? { root: targetPath, tree: await refreshTree(targetPath) } : await openFolder();
       if (!result) return;
       setProjectRoot(result.root);
       setRootName(result.root.split(/[\/\\]/).pop() || result.root);
@@ -214,10 +251,40 @@ function App() {
       setActiveTabPath("");
       setRecentFilePaths([]);
       setOpenFolders(new Set([result.tree.path]));
+      // Add to recent projects
+      addRecentProject(result.root);
+      // Clear navigation history
+      setNavHistory([]);
+      setNavIndex(-1);
     } catch (e) {
       setError(String(e));
     }
-  }, [openTabs]);
+  }, [openTabs, addRecentProject]);
+
+  const handleOpenFolder = useCallback(async () => {
+    await handleOpenFolderWithSession();
+  }, [handleOpenFolderWithSession]);
+
+  // Navigation history handlers
+  const addToNavHistory = useCallback((path: string, line?: number) => {
+    if (isNavigating) return;
+    setNavHistory(prev => {
+      const entry: NavigationEntry = { path, line };
+      // Remove any entries after current index
+      const newHistory = prev.slice(0, navIndex + 1);
+      // Add new entry if different from current
+      const lastEntry = newHistory[newHistory.length - 1];
+      if (!lastEntry || lastEntry.path !== path || lastEntry.line !== line) {
+        newHistory.push(entry);
+        // Keep only last 50 entries
+        if (newHistory.length > 50) {
+          newHistory.shift();
+        }
+        setNavIndex(newHistory.length - 1);
+      }
+      return newHistory;
+    });
+  }, [navIndex, isNavigating]);
 
   const handleOpenFile = useCallback(
     async (path: string, lineNumber?: number) => {
@@ -226,6 +293,7 @@ function App() {
       if (existing) {
         setActiveTabPath(path);
         updateRecentFiles(path);
+        addToNavHistory(path, lineNumber);
         // If line number specified, scroll to it after a short delay to allow editor to render
         if (lineNumber !== undefined && lineNumber > 0) {
           setTimeout(() => scrollToLine(lineNumber), 50);
@@ -252,6 +320,7 @@ function App() {
           )
         );
         updateRecentFiles(path);
+        addToNavHistory(path, lineNumber);
         // If line number specified, scroll to it after content is loaded
         if (lineNumber !== undefined && lineNumber > 0) {
           setTimeout(() => scrollToLine(lineNumber), 100);
@@ -267,7 +336,7 @@ function App() {
         );
       }
     },
-    [openTabs, activeTabPath, updateRecentFiles, scrollToLine]
+    [openTabs, activeTabPath, updateRecentFiles, scrollToLine, addToNavHistory]
   );
 
   const handleSave = useCallback(async () => {
@@ -482,9 +551,234 @@ function App() {
   // Refresh git changes when switching to diff tab
   useEffect(() => {
     if (bottomPanelTab === "diff" && projectRoot && isGitRepo) {
-      getWorkingTreeChanges(projectRoot).then(setGitChanges).catch(() => setGitChanges([]));
+      Promise.all([
+        getWorkingTreeChanges(projectRoot).catch(() => []),
+        getStagedFiles(projectRoot).catch(() => []),
+      ]).then(([changes, staged]) => {
+        setGitChanges(changes);
+        setStagedFiles(staged);
+      });
     }
   }, [bottomPanelTab, projectRoot, isGitRepo]);
+
+  // Load blame when switching to blame tab
+  useEffect(() => {
+    if (bottomPanelTab === "blame" && projectRoot && isGitRepo && activeTab) {
+      getFileBlame(projectRoot, activeTab.path)
+        .then(setFileBlame)
+        .catch(() => setFileBlame(null));
+    }
+  }, [bottomPanelTab, projectRoot, isGitRepo, activeTab]);
+
+  // Git stage/unstage handlers
+  const handleStageFile = useCallback(async (filePath: string) => {
+    if (!projectRoot) return;
+    try {
+      await stageFile(projectRoot, filePath);
+      // Refresh both changes and staged files
+      const [changes, staged] = await Promise.all([
+        getWorkingTreeChanges(projectRoot).catch(() => []),
+        getStagedFiles(projectRoot).catch(() => []),
+      ]);
+      setGitChanges(changes);
+      setStagedFiles(staged);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot]);
+
+  const handleUnstageFile = useCallback(async (filePath: string) => {
+    if (!projectRoot) return;
+    try {
+      await unstageFile(projectRoot, filePath);
+      // Refresh both changes and staged files
+      const [changes, staged] = await Promise.all([
+        getWorkingTreeChanges(projectRoot).catch(() => []),
+        getStagedFiles(projectRoot).catch(() => []),
+      ]);
+      setGitChanges(changes);
+      setStagedFiles(staged);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot]);
+
+  const handleCommit = useCallback(async () => {
+    if (!projectRoot || !commitMessage.trim()) return;
+    setIsCommitting(true);
+    try {
+      await commit(projectRoot, commitMessage.trim());
+      setCommitMessage("");
+      // Refresh git data
+      await refreshGitData();
+      // Refresh staged files
+      const staged = await getStagedFiles(projectRoot).catch(() => []);
+      setStagedFiles(staged);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setIsCommitting(false);
+    }
+  }, [projectRoot, commitMessage, refreshGitData]);
+
+  // Persistence handlers
+  const removeRecentProject = useCallback((path: string) => {
+    setRecentProjects(prev => {
+      const updated = prev.filter(p => p.path !== path);
+      saveRecentProjects(updated).catch(() => {});
+      return updated;
+    });
+  }, []);
+
+  // Load recent projects on mount
+  useEffect(() => {
+    loadRecentProjects().then(setRecentProjects).catch(() => setRecentProjects([]));
+  }, []);
+
+  // Navigation history handlers
+  const goBack = useCallback(() => {
+    if (navIndex <= 0) return;
+    setIsNavigating(true);
+    const entry = navHistory[navIndex - 1];
+    if (entry) {
+      handleOpenFile(entry.path, entry.line);
+      setNavIndex(navIndex - 1);
+    }
+    setTimeout(() => setIsNavigating(false), 100);
+  }, [navIndex, navHistory]);
+
+  const goForward = useCallback(() => {
+    if (navIndex >= navHistory.length - 1) return;
+    setIsNavigating(true);
+    const entry = navHistory[navIndex + 1];
+    if (entry) {
+      handleOpenFile(entry.path, entry.line);
+      setNavIndex(navIndex + 1);
+    }
+    setTimeout(() => setIsNavigating(false), 100);
+  }, [navIndex, navHistory]);
+
+  // File tree operations
+  const handleCreateFile = useCallback(async (dirPath: string, name: string) => {
+    if (!projectRoot) return;
+    const fullPath = `${dirPath}/${name}`;
+    try {
+      await createFile(projectRoot, fullPath);
+      // Refresh tree
+      const newTree = await refreshTree(projectRoot);
+      setTree(newTree);
+      // Open the new file
+      await handleOpenFile(fullPath);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot, handleOpenFile]);
+
+  const handleCreateDirectory = useCallback(async (dirPath: string, name: string) => {
+    if (!projectRoot) return;
+    const fullPath = `${dirPath}/${name}`;
+    try {
+      await createDirectory(projectRoot, fullPath);
+      // Refresh tree
+      const newTree = await refreshTree(projectRoot);
+      setTree(newTree);
+      // Auto-open the new folder
+      setOpenFolders(prev => new Set([...prev, fullPath]));
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot]);
+
+  const handleRename = useCallback(async (oldPath: string, newName: string) => {
+    if (!projectRoot) return;
+    const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
+    const newPath = `${parentPath}/${newName}`;
+    try {
+      await renamePath(projectRoot, oldPath, newPath);
+      // Update tabs if the renamed file was open
+      setOpenTabs(prev => prev.map(tab =>
+        tab.path === oldPath ? { ...tab, path: newPath } : tab
+      ));
+      if (activeTabPath === oldPath) {
+        setActiveTabPath(newPath);
+      }
+      // Refresh tree
+      const newTree = await refreshTree(projectRoot);
+      setTree(newTree);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot, activeTabPath]);
+
+  const handleDelete = useCallback(async (path: string, isDir: boolean) => {
+    if (!projectRoot) return;
+    const itemType = isDir ? "directory" : "file";
+    const ok = confirm(`Are you sure you want to delete this ${itemType}?\n${path}`);
+    if (!ok) return;
+
+    // Check for unsaved changes if it's a file
+    if (!isDir) {
+      const tab = openTabs.find(t => t.path === path);
+      if (tab?.isDirty) {
+        const saveOk = confirm("This file has unsaved changes. Delete anyway?");
+        if (!saveOk) return;
+      }
+    }
+
+    try {
+      await deletePath(projectRoot, path);
+      // Close tab if the deleted file was open
+      if (!isDir) {
+        setOpenTabs(prev => prev.filter(t => t.path !== path));
+        if (activeTabPath === path) {
+          const remaining = openTabs.filter(t => t.path !== path);
+          setActiveTabPath(remaining.length > 0 ? remaining[0].path : "");
+        }
+      }
+      // Refresh tree
+      const newTree = await refreshTree(projectRoot);
+      setTree(newTree);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot, openTabs, activeTabPath]);
+
+  const handleRefreshTree = useCallback(async () => {
+    if (!projectRoot) return;
+    try {
+      const newTree = await refreshTree(projectRoot);
+      setTree(newTree);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot]);
+
+  // Load session on mount
+  useEffect(() => {
+    const init = async () => {
+      const session = await loadSession().catch(() => null);
+      if (session?.project_root) {
+        try {
+          const tree = await refreshTree(session.project_root);
+          setProjectRoot(session.project_root);
+          setRootName(session.project_root.split(/[\/\\]/).pop() || session.project_root);
+          setTree(tree);
+          setOpenFolders(new Set(session.open_folders));
+          // Open tabs
+          for (const path of session.open_tabs) {
+            await handleOpenFile(path);
+          }
+          // Set active tab
+          if (session.active_tab_path) {
+            setActiveTabPath(session.active_tab_path);
+          }
+        } catch {
+          // Session loading failed, start fresh
+        }
+      }
+    };
+    init();
+  }, []);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -498,6 +792,21 @@ function App() {
     setGlobalSelectedIndex(0);
   }, [globalSearchQuery]);
 
+  // Save session state when relevant state changes (debounced)
+  useEffect(() => {
+    if (!projectRoot) return;
+    const timeoutId = setTimeout(() => {
+      const state = {
+        project_root: projectRoot,
+        open_tabs: openTabs.map(t => t.path),
+        active_tab_path: activeTabPath,
+        open_folders: Array.from(openFolders),
+      };
+      saveSession(state).catch(() => {});
+    }, 500);
+    return () => clearTimeout(timeoutId);
+  }, [projectRoot, openTabs, activeTabPath, openFolders]);
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const isOpenFolder =
@@ -510,10 +819,16 @@ function App() {
         (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "s";
       const isRecentFiles =
         (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e";
+      const isRecentProjects =
+        (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "o";
       const isInFileSearch =
         (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f";
       const isGlobalSearch =
         (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f";
+      const isBack =
+        (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "arrowleft";
+      const isForward =
+        (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "arrowright";
 
       // Handle Global Search modal keyboard navigation
       if (globalSearchOpen) {
@@ -646,6 +961,12 @@ function App() {
         return;
       }
 
+      if (isRecentProjects) {
+        e.preventDefault();
+        setRecentProjectsOpen(true);
+        return;
+      }
+
       if (isInFileSearch) {
         e.preventDefault();
         if (!activeTab) return;
@@ -661,6 +982,18 @@ function App() {
         setTimeout(() => globalInputRef.current?.focus(), 0);
         return;
       }
+
+      if (isBack) {
+        e.preventDefault();
+        goBack();
+        return;
+      }
+
+      if (isForward) {
+        e.preventDefault();
+        goForward();
+        return;
+      }
     }
 
     window.addEventListener("keydown", onKeyDown);
@@ -672,6 +1005,8 @@ function App() {
     recentOpen,
     recentFilePaths,
     recentSelectedIndex,
+    recentProjectsOpen,
+    setRecentProjectsOpen,
     globalSearchOpen,
     globalSearchResults,
     globalSelectedIndex,
@@ -685,6 +1020,8 @@ function App() {
     handleOpenFile,
     goToNextMatch,
     goToPrevMatch,
+    goBack,
+    goForward,
   ]);
 
   return (
@@ -886,6 +1223,134 @@ function App() {
         </div>
       )}
 
+      {/* Recent Projects Modal */}
+      {recentProjectsOpen && (
+        <div className="finder-overlay" onClick={() => setRecentProjectsOpen(false)}>
+          <div className="finder-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="finder-header">Recent Projects</div>
+            <div className="finder-list">
+              {recentProjects.length === 0 ? (
+                <div className="finder-empty">No recent projects</div>
+              ) : (
+                recentProjects.map((project) => (
+                  <div
+                    key={project.path}
+                    className="finder-item"
+                  >
+                    <span className="finder-icon">📁</span>
+                    <span
+                      className="finder-path"
+                      style={{ flex: 1, cursor: 'pointer' }}
+                      onClick={() => {
+                        handleOpenFolderWithSession(project.path);
+                        setRecentProjectsOpen(false);
+                      }}
+                    >
+                      {project.name}
+                    </span>
+                    <button
+                      className="icon-btn"
+                      style={{ padding: '2px 6px', fontSize: '12px' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeRecentProject(project.path);
+                      }}
+                      title="Remove from list"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="finder-hint">
+              <span>Click</span> to open <span>×</span> to remove <span>esc</span> to close
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename Modal */}
+      {renameModal && (
+        <div className="finder-overlay" onClick={() => setRenameModal(null)}>
+          <div className="finder-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="finder-header">Rename</div>
+            <input
+              className="finder-input"
+              value={renameModal.newName}
+              onChange={(e) => setRenameModal({ ...renameModal, newName: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleRename(renameModal.path, renameModal.newName);
+                  setRenameModal(null);
+                } else if (e.key === 'Escape') {
+                  setRenameModal(null);
+                }
+              }}
+              autoFocus
+            />
+            <div className="finder-actions">
+              <button className="search-btn" onClick={() => setRenameModal(null)}>Cancel</button>
+              <button
+                className="search-btn"
+                onClick={() => {
+                  handleRename(renameModal.path, renameModal.newName);
+                  setRenameModal(null);
+                }}
+                disabled={!renameModal.newName.trim()}
+              >
+                Rename
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New File/Directory Modal */}
+      {newFileModal && (
+        <div className="finder-overlay" onClick={() => setNewFileModal(null)}>
+          <div className="finder-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="finder-header">{newFileModal.isDir ? 'New Folder' : 'New File'}</div>
+            <input
+              className="finder-input"
+              placeholder={newFileModal.isDir ? 'folder-name' : 'file-name'}
+              value={newFileModal.name}
+              onChange={(e) => setNewFileModal({ ...newFileModal, name: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  if (newFileModal.isDir) {
+                    handleCreateDirectory(newFileModal.dirPath, newFileModal.name);
+                  } else {
+                    handleCreateFile(newFileModal.dirPath, newFileModal.name);
+                  }
+                  setNewFileModal(null);
+                } else if (e.key === 'Escape') {
+                  setNewFileModal(null);
+                }
+              }}
+              autoFocus
+            />
+            <div className="finder-actions">
+              <button className="search-btn" onClick={() => setNewFileModal(null)}>Cancel</button>
+              <button
+                className="search-btn"
+                onClick={() => {
+                  if (newFileModal.isDir) {
+                    handleCreateDirectory(newFileModal.dirPath, newFileModal.name);
+                  } else {
+                    handleCreateFile(newFileModal.dirPath, newFileModal.name);
+                  }
+                  setNewFileModal(null);
+                }}
+                disabled={!newFileModal.name.trim()}
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="titlebar">
         <span className="logo">Fika</span>
         <span className="project-name">
@@ -902,6 +1367,31 @@ function App() {
           </button>
         )}
         <div className="spacer" />
+        {/* Navigation buttons */}
+        <button
+          className="icon-btn"
+          title="Back (Ctrl+Left)"
+          onClick={goBack}
+          disabled={navIndex <= 0}
+        >
+          ←
+        </button>
+        <button
+          className="icon-btn"
+          title="Forward (Ctrl+Right)"
+          onClick={goForward}
+          disabled={navIndex >= navHistory.length - 1}
+        >
+          →
+        </button>
+        {/* Recent Projects button */}
+        <button
+          className="icon-btn"
+          title="Recent Projects (Ctrl+Shift+O)"
+          onClick={() => setRecentProjectsOpen(true)}
+        >
+          📚
+        </button>
         <button
           className="icon-btn"
           title="Open Folder (Ctrl+O)"
@@ -929,8 +1419,26 @@ function App() {
 
       <div className="main">
         <aside className="sidebar left">
-          <div className="panel-header">Project</div>
-          <div className="panel-content">
+          <div className="panel-header">
+            <span>Project</span>
+            <button
+              className="icon-btn"
+              title="Refresh"
+              onClick={handleRefreshTree}
+              style={{ marginLeft: 'auto', fontSize: '12px' }}
+            >
+              🔄
+            </button>
+          </div>
+          <div
+            className="panel-content"
+            onContextMenu={(e) => {
+              e.preventDefault();
+              if (projectRoot) {
+                setContextMenu({ x: e.clientX, y: e.clientY, path: projectRoot, isDir: true });
+              }
+            }}
+          >
             <ul className="file-tree">
               {tree ? (
                 <FileTree
@@ -940,6 +1448,10 @@ function App() {
                   toggleFolder={toggleFolder}
                   selectedFile={activeTabPath}
                   onSelectFile={handleOpenFile}
+                  onContextMenu={(path, isDir, e) => {
+                    e.stopPropagation();
+                    setContextMenu({ x: e.clientX, y: e.clientY, path, isDir });
+                  }}
                 />
               ) : (
                 <li className="tree-empty" onClick={handleOpenFolder}>
@@ -948,6 +1460,57 @@ function App() {
               )}
             </ul>
           </div>
+          {/* Context Menu */}
+          {contextMenu && (
+            <div
+              className="context-menu"
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+              onClick={() => setContextMenu(null)}
+            >
+              {contextMenu.isDir && (
+                <>
+                  <div
+                    className="context-menu-item"
+                    onClick={() => {
+                      setNewFileModal({ dirPath: contextMenu.path, name: '', isDir: false });
+                      setContextMenu(null);
+                    }}
+                  >
+                    New File
+                  </div>
+                  <div
+                    className="context-menu-item"
+                    onClick={() => {
+                      setNewFileModal({ dirPath: contextMenu.path, name: '', isDir: true });
+                      setContextMenu(null);
+                    }}
+                  >
+                    New Folder
+                  </div>
+                  <div className="context-menu-divider" />
+                </>
+              )}
+              <div
+                className="context-menu-item"
+                onClick={() => {
+                  const name = contextMenu.path.split('/').pop() || '';
+                  setRenameModal({ path: contextMenu.path, isDir: contextMenu.isDir, newName: name });
+                  setContextMenu(null);
+                }}
+              >
+                Rename
+              </div>
+              <div
+                className="context-menu-item context-menu-item-danger"
+                onClick={() => {
+                  handleDelete(contextMenu.path, contextMenu.isDir);
+                  setContextMenu(null);
+                }}
+              >
+                Delete
+              </div>
+            </div>
+          )}
         </aside>
 
         <section className="editor">
@@ -1071,64 +1634,151 @@ function App() {
             <div className="git-panel">
               {!isGitRepo ? (
                 <div className="git-empty">Not a git repository</div>
-              ) : gitChanges.length === 0 ? (
-                <div className="git-empty">No working tree changes</div>
+              ) : selectedDiffFile && fileDiff ? (
+                <div className="diff-view">
+                  <div className="diff-header">
+                    <button
+                      className="back-btn"
+                      onClick={() => {
+                        setSelectedDiffFile(null);
+                        setFileDiff(null);
+                      }}
+                    >
+                      ← Back to changes
+                    </button>
+                    <span className="diff-file-path">{fileDiff.path}</span>
+                  </div>
+                  <div className="diff-content">
+                    {fileDiff.hunks.length === 0 ? (
+                      <div className="diff-hunk">
+                        <div className="diff-line ctx">No diff available</div>
+                      </div>
+                    ) : (
+                      fileDiff.hunks.map((hunk, idx) => (
+                        <div key={idx} className="diff-hunk">
+                          <div className="diff-hunk-header">{hunk.header}</div>
+                          {hunk.lines.map((line, lineIdx) => (
+                            <div
+                              key={lineIdx}
+                              className={`diff-line ${line.kind === "+" ? "add" : line.kind === "-" ? "del" : "ctx"}`}
+                            >
+                              <span className="diff-line-num">
+                                {line.old_line ?? ""}
+                                {line.old_line && line.new_line ? "/" : ""}
+                                {line.new_line ?? ""}
+                              </span>
+                              <span className="diff-line-kind">{line.kind}</span>
+                              <span className="diff-line-content">{line.content}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
               ) : (
                 <div className="git-changes">
-                  {selectedDiffFile && fileDiff ? (
-                    <div className="diff-view">
-                      <div className="diff-header">
+                  {/* Staged Files Section */}
+                  <div className="changes-section">
+                    <div className="changes-section-header">
+                      <span>Staged Changes ({stagedFiles.length})</span>
+                      {stagedFiles.length > 0 && (
                         <button
-                          className="back-btn"
-                          onClick={() => {
-                            setSelectedDiffFile(null);
-                            setFileDiff(null);
+                          className="action-btn"
+                          onClick={async () => {
+                            for (const file of stagedFiles) {
+                              await handleUnstageFile(file.path);
+                            }
                           }}
                         >
-                          ← Back to changes
+                          Unstage All
                         </button>
-                        <span className="diff-file-path">{fileDiff.path}</span>
-                      </div>
-                      <div className="diff-content">
-                        {fileDiff.hunks.length === 0 ? (
-                          <div className="diff-hunk">
-                            <div className="diff-line ctx">No diff available</div>
-                          </div>
-                        ) : (
-                          fileDiff.hunks.map((hunk, idx) => (
-                            <div key={idx} className="diff-hunk">
-                              <div className="diff-hunk-header">{hunk.header}</div>
-                              {hunk.lines.map((line, lineIdx) => (
-                                <div
-                                  key={lineIdx}
-                                  className={`diff-line ${line.kind === "+" ? "add" : line.kind === "-" ? "del" : "ctx"}`}
-                                >
-                                  <span className="diff-line-num">
-                                    {line.old_line ?? ""}
-                                    {line.old_line && line.new_line ? "/" : ""}
-                                    {line.new_line ?? ""}
-                                  </span>
-                                  <span className="diff-line-kind">{line.kind}</span>
-                                  <span className="diff-line-content">{line.content}</span>
-                                </div>
-                              ))}
-                            </div>
-                          ))
-                        )}
-                      </div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="changed-files-list">
-                      {gitChanges.map((file) => (
-                        <div
-                          key={file.path}
-                          className="changed-file-item"
-                          onClick={() => handleShowFileDiff(file.path)}
+                    {stagedFiles.length === 0 ? (
+                      <div className="changes-empty">No staged changes</div>
+                    ) : (
+                      <div className="changed-files-list">
+                        {stagedFiles.map((file) => (
+                          <div
+                            key={file.path}
+                            className="changed-file-item"
+                          >
+                            <span className={`file-status status-${file.status}`}>{file.status}</span>
+                            <span className="file-path" onClick={() => handleShowFileDiff(file.path)}>{file.path}</span>
+                            <button
+                              className="action-btn-sm"
+                              onClick={() => handleUnstageFile(file.path)}
+                            >
+                              −
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Unstaged Files Section */}
+                  <div className="changes-section">
+                    <div className="changes-section-header">
+                      <span>Changes ({gitChanges.length})</span>
+                      {gitChanges.length > 0 && (
+                        <button
+                          className="action-btn"
+                          onClick={async () => {
+                            for (const file of gitChanges) {
+                              await handleStageFile(file.path);
+                            }
+                          }}
                         >
-                          <span className={`file-status status-${file.status}`}>{file.status}</span>
-                          <span className="file-path">{file.path}</span>
-                        </div>
-                      ))}
+                          Stage All
+                        </button>
+                      )}
+                    </div>
+                    {gitChanges.length === 0 ? (
+                      <div className="changes-empty">No changes</div>
+                    ) : (
+                      <div className="changed-files-list">
+                        {gitChanges.map((file) => (
+                          <div
+                            key={file.path}
+                            className="changed-file-item"
+                          >
+                            <span className={`file-status status-${file.status}`}>{file.status}</span>
+                            <span className="file-path" onClick={() => handleShowFileDiff(file.path)}>{file.path}</span>
+                            <button
+                              className="action-btn-sm"
+                              onClick={() => handleStageFile(file.path)}
+                            >
+                              +
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Commit Section */}
+                  {stagedFiles.length > 0 && (
+                    <div className="commit-section">
+                      <input
+                        className="commit-input"
+                        placeholder="Commit message..."
+                        value={commitMessage}
+                        onChange={(e) => setCommitMessage(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && e.metaKey) {
+                            handleCommit();
+                          }
+                        }}
+                      />
+                      <button
+                        className="commit-btn"
+                        onClick={handleCommit}
+                        disabled={!commitMessage.trim() || isCommitting}
+                      >
+                        {isCommitting ? 'Committing...' : 'Commit'}
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1199,10 +1849,30 @@ function App() {
             </div>
           )}
           {bottomPanelTab === "blame" && (
-            <div className="diff-content">
-              <div className="diff-hunk">
-                <div className="diff-line ctx">Git blame will appear here</div>
-              </div>
+            <div className="git-panel">
+              {!isGitRepo ? (
+                <div className="git-empty">Not a git repository</div>
+              ) : !activeTab ? (
+                <div className="git-empty">Open a file to see blame</div>
+              ) : fileBlame ? (
+                <div className="blame-view">
+                  {fileBlame.lines.map((line, idx) => (
+                    <div key={idx} className="blame-line">
+                      <span className="blame-hash" title={line.commit_hash}>
+                        {line.short_hash}
+                      </span>
+                      <span className="blame-author" title={line.author}>
+                        {line.author}
+                      </span>
+                      <span className="blame-time">{line.time}</span>
+                      <span className="blame-line-num">{line.line_number}</span>
+                      <span className="blame-content">{line.content}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="git-empty">Loading blame...</div>
+              )}
             </div>
           )}
         </div>

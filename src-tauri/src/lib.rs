@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -75,6 +75,43 @@ pub struct DiffLine {
 pub struct CommitFiles {
     pub hash: String,
     pub files: Vec<ChangedFile>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct BlameLine {
+    pub line_number: usize,
+    pub content: String,
+    pub commit_hash: String,
+    pub short_hash: String,
+    pub author: String,
+    pub time: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct FileBlame {
+    pub path: String,
+    pub lines: Vec<BlameLine>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct StagedFile {
+    pub path: String,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RecentProject {
+    pub path: String,
+    pub name: String,
+    pub last_opened: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionState {
+    pub project_root: Option<String>,
+    pub open_tabs: Vec<String>,
+    pub active_tab_path: String,
+    pub open_folders: Vec<String>,
 }
 
 #[tauri::command]
@@ -449,8 +486,8 @@ fn parse_diff_output(output: &str, file_path: &str) -> FileDiff {
             }
 
             // Parse hunk header: @@ -old_start,old_lines +new_start,new_lines @@
-            if let Some(end) = line.find("@@", 2) {
-                let header = &line[2..end];
+            if let Some(end) = line[2..].find("@@") {
+                let header = &line[2..(end + 2)];
                 let parts: Vec<&str> = header.split_whitespace().collect();
 
                 let old_range = parts.get(0).unwrap_or(&"-0,0");
@@ -553,6 +590,342 @@ fn extract_matched_fragment(line: &str, query: &str) -> String {
     }
 }
 
+// Git blame command
+#[tauri::command]
+async fn get_file_blame(path: String, file: String) -> Result<FileBlame, String> {
+    if !is_git_repo(&path) {
+        return Err("Not a git repository".to_string());
+    }
+
+    let output = run_git_command(&["blame", "--porcelain", &file], &path)?;
+    let mut lines = Vec::new();
+    let mut line_number = 0usize;
+    let mut current_commit: Option<String> = None;
+    let mut current_author: Option<String> = None;
+    let mut current_time: Option<String> = None;
+
+    for line in output.lines() {
+        if line.starts_with("\t") {
+            // This is the actual line content
+            line_number += 1;
+            let content = line[1..].to_string();
+            let hash = current_commit.clone().unwrap_or_default();
+            let short_hash = if hash.len() >= 8 {
+                hash[..8].to_string()
+            } else {
+                hash.clone()
+            };
+            lines.push(BlameLine {
+                line_number,
+                content,
+                commit_hash: hash.clone(),
+                short_hash,
+                author: current_author.clone().unwrap_or_default(),
+                time: current_time.clone().unwrap_or_default(),
+            });
+        } else if line.starts_with(" ") {
+            // Line content indicator - skip
+            continue;
+        } else {
+            // Header line with commit info
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if !parts.is_empty() {
+                let hash = parts[0].to_string();
+                if hash.len() >= 8 && !line.starts_with("author ") && !line.starts_with("committer ") {
+                    current_commit = Some(hash.clone());
+                }
+            }
+            if line.starts_with("author ") && !line.starts_with("author-mail ") {
+                current_author = Some(line[7..].to_string());
+            }
+            if line.starts_with("author-time ") {
+                if let Ok(timestamp) = line[12..].parse::<i64>() {
+                    current_time = Some(format_timestamp(timestamp));
+                }
+            }
+        }
+    }
+
+    Ok(FileBlame { path: file, lines })
+}
+
+fn format_timestamp(timestamp: i64) -> String {
+    use std::time::{Duration, UNIX_EPOCH};
+    use std::time::SystemTime;
+
+    let system_time = UNIX_EPOCH + Duration::from_secs(timestamp as u64);
+    let now = SystemTime::now();
+    let duration = now.duration_since(system_time).ok();
+
+    if let Some(d) = duration {
+        let secs = d.as_secs();
+        if secs < 60 {
+            return "just now".to_string();
+        } else if secs < 3600 {
+            return format!("{}m ago", secs / 60);
+        } else if secs < 86400 {
+            return format!("{}h ago", secs / 3600);
+        } else if secs < 604800 {
+            return format!("{}d ago", secs / 86400);
+        }
+    }
+
+    // Fallback to date string
+    let datetime: chrono::DateTime<chrono::Local> = system_time.into();
+    datetime.format("%Y-%m-%d").to_string()
+}
+
+// Git stage/unstage commands
+#[tauri::command]
+async fn stage_file(path: String, file: String) -> Result<(), String> {
+    if !is_git_repo(&path) {
+        return Err("Not a git repository".to_string());
+    }
+
+    run_git_command(&["add", &file], &path).map(|_| ())
+}
+
+#[tauri::command]
+async fn unstage_file(path: String, file: String) -> Result<(), String> {
+    if !is_git_repo(&path) {
+        return Err("Not a git repository".to_string());
+    }
+
+    run_git_command(&["reset", "HEAD", &file], &path).map(|_| ())
+}
+
+#[tauri::command]
+async fn commit(path: String, message: String) -> Result<String, String> {
+    if !is_git_repo(&path) {
+        return Err("Not a git repository".to_string());
+    }
+
+    run_git_command(&["commit", "-m", &message], &path)?;
+    let output = run_git_command(&["rev-parse", "--short", "HEAD"], &path)?;
+    Ok(output.trim().to_string())
+}
+
+#[tauri::command]
+async fn get_staged_files(path: String) -> Result<Vec<StagedFile>, String> {
+    if !is_git_repo(&path) {
+        return Ok(vec![]);
+    }
+
+    let output = run_git_command(&["diff", "--cached", "--name-status"], &path)?;
+    let mut files = Vec::new();
+
+    for line in output.lines() {
+        if line.len() < 3 {
+            continue;
+        }
+
+        let status_code = &line[0..1];
+        let file_path = &line[2..];
+
+        let status = match status_code {
+            "M" => "M",
+            "A" => "A",
+            "D" => "D",
+            "R" => "R",
+            "C" => "C",
+            _ => "M",
+        };
+
+        files.push(StagedFile {
+            path: file_path.to_string(),
+            status: status.to_string(),
+        });
+    }
+
+    Ok(files)
+}
+
+// File system operations - all paths must be within project root
+fn is_path_within_project(project_root: &str, target_path: &str) -> Result<(), String> {
+    let root = Path::new(project_root).canonicalize()
+        .map_err(|_| format!("Invalid project root: {}", project_root))?;
+    let target = Path::new(target_path).canonicalize()
+        .map_err(|_| format!("Invalid path: {}", target_path))?;
+
+    if !target.starts_with(&root) {
+        return Err(format!("Path '{}' is outside project root '{}'", target_path, project_root));
+    }
+    Ok(())
+}
+
+// For paths that may not exist yet (e.g., new file/directory), check the parent directory
+fn is_parent_within_project(project_root: &str, target_path: &str) -> Result<(), String> {
+    let root = Path::new(project_root).canonicalize()
+        .map_err(|_| format!("Invalid project root: {}", project_root))?;
+    let path = Path::new(target_path);
+
+    // Get the parent directory (or use the path itself if it's the root)
+    let parent = path.parent()
+        .ok_or_else(|| format!("Path '{}' has no parent directory", target_path))?;
+
+    // If parent doesn't exist, try to find the first existing ancestor
+    let mut check_path = parent;
+    while !check_path.exists() {
+        check_path = check_path.parent()
+            .ok_or_else(|| format!("Cannot determine project boundary for '{}'", target_path))?;
+    }
+
+    let canonical_parent = check_path.canonicalize()
+        .map_err(|_| format!("Invalid path: {}", check_path.display()))?;
+
+    if !canonical_parent.starts_with(&root) {
+        return Err(format!("Path '{}' is outside project root '{}'", target_path, project_root));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn create_file(project_root: String, path: String) -> Result<(), String> {
+    // Ensure the parent directory is within the project
+    is_parent_within_project(&project_root, &path)?;
+    let path_obj = Path::new(&path);
+
+    // Create parent directories if they don't exist
+    if let Some(parent) = path_obj.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create parent directories: {}", e))?;
+    }
+
+    fs::write(&path, "").map_err(|e| format!("Failed to create file: {}", e))
+}
+
+#[tauri::command]
+async fn create_directory(project_root: String, path: String) -> Result<(), String> {
+    // Ensure the parent directory is within the project
+    is_parent_within_project(&project_root, &path)?;
+    fs::create_dir_all(&path).map_err(|e| format!("Failed to create directory: {}", e))
+}
+
+#[tauri::command]
+async fn rename_path(project_root: String, old_path: String, new_path: String) -> Result<(), String> {
+    // old_path must exist and be within project
+    is_path_within_project(&project_root, &old_path)?;
+    // new_path may not exist yet, check its parent directory
+    is_parent_within_project(&project_root, &new_path)?;
+    fs::rename(&old_path, &new_path).map_err(|e| format!("Failed to rename: {}", e))
+}
+
+#[tauri::command]
+async fn delete_path(project_root: String, path: String) -> Result<(), String> {
+    is_path_within_project(&project_root, &path)?;
+    let path_obj = Path::new(&path);
+
+    if path_obj.is_dir() {
+        fs::remove_dir_all(&path).map_err(|e| format!("Failed to delete directory: {}", e))
+    } else {
+        fs::remove_file(&path).map_err(|e| format!("Failed to delete file: {}", e))
+    }
+}
+
+#[tauri::command]
+async fn refresh_tree(root: String) -> Result<FileNode, String> {
+    read_dir_recursive(&root)
+}
+
+// Persistence - using simple JSON files in app's config directory
+use tauri::Manager;
+
+fn get_config_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app_handle.path().app_config_dir()
+        .map(|dir| {
+            fs::create_dir_all(&dir).ok();
+            dir
+        })
+        .map_err(|_| "Failed to get config directory".to_string())
+}
+
+#[tauri::command]
+async fn save_recent_projects(app_handle: tauri::AppHandle, projects: Vec<RecentProject>) -> Result<(), String> {
+    let config_dir = get_config_dir(&app_handle)?;
+    let file_path = config_dir.join("recent_projects.json");
+
+    let json = serde_json::to_string(&projects).map_err(|e| format!("Failed to serialize: {}", e))?;
+    fs::write(file_path, json).map_err(|e| format!("Failed to write: {}", e))
+}
+
+#[tauri::command]
+async fn load_recent_projects(app_handle: tauri::AppHandle) -> Result<Vec<RecentProject>, String> {
+    let config_dir = get_config_dir(&app_handle)?;
+    let file_path = config_dir.join("recent_projects.json");
+
+    if !file_path.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = fs::read_to_string(file_path).map_err(|e| format!("Failed to read: {}", e))?;
+    let projects: Vec<RecentProject> = serde_json::from_str(&content).map_err(|e| format!("Failed to parse: {}", e))?;
+
+    // Filter out projects that no longer exist
+    let valid_projects: Vec<RecentProject> = projects
+        .into_iter()
+        .filter(|p| Path::new(&p.path).exists())
+        .collect();
+
+    Ok(valid_projects)
+}
+
+#[tauri::command]
+async fn save_session(app_handle: tauri::AppHandle, state: SessionState) -> Result<(), String> {
+    let config_dir = get_config_dir(&app_handle)?;
+    let file_path = config_dir.join("session.json");
+
+    // Filter out tabs for files that no longer exist
+    let valid_tabs: Vec<String> = state.open_tabs
+        .into_iter()
+        .filter(|p| Path::new(p).exists())
+        .collect();
+
+    let filtered_state = SessionState {
+        project_root: state.project_root.filter(|p| Path::new(p).exists()),
+        open_tabs: valid_tabs,
+        active_tab_path: if Path::new(&state.active_tab_path).exists() {
+            state.active_tab_path
+        } else {
+            String::new()
+        },
+        open_folders: state.open_folders.into_iter().filter(|p| Path::new(p).exists()).collect(),
+    };
+
+    let json = serde_json::to_string(&filtered_state).map_err(|e| format!("Failed to serialize: {}", e))?;
+    fs::write(file_path, json).map_err(|e| format!("Failed to write: {}", e))
+}
+
+#[tauri::command]
+async fn load_session(app_handle: tauri::AppHandle) -> Result<SessionState, String> {
+    let config_dir = get_config_dir(&app_handle)?;
+    let file_path = config_dir.join("session.json");
+
+    if !file_path.exists() {
+        return Ok(SessionState {
+            project_root: None,
+            open_tabs: vec![],
+            active_tab_path: String::new(),
+            open_folders: vec![],
+        });
+    }
+
+    let content = fs::read_to_string(file_path).map_err(|e| format!("Failed to read: {}", e))?;
+    let state: SessionState = serde_json::from_str(&content).map_err(|e| format!("Failed to parse: {}", e))?;
+
+    // Filter out invalid paths
+    let valid_state = SessionState {
+        project_root: state.project_root.filter(|p| Path::new(p).exists()),
+        open_tabs: state.open_tabs.into_iter().filter(|p| Path::new(p).exists()).collect(),
+        active_tab_path: if Path::new(&state.active_tab_path).exists() {
+            state.active_tab_path
+        } else {
+            String::new()
+        },
+        open_folders: state.open_folders.into_iter().filter(|p| Path::new(p).exists()).collect(),
+    };
+
+    Ok(valid_state)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -561,7 +934,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_folder, read_file, write_file, search_in_project,
             get_current_branch, get_branches, switch_branch,
-            get_git_history, get_working_tree_changes, get_file_diff, get_commit_files
+            get_git_history, get_working_tree_changes, get_file_diff, get_commit_files,
+            get_file_blame, stage_file, unstage_file, commit, get_staged_files,
+            create_file, create_directory, rename_path, delete_path, refresh_tree,
+            save_recent_projects, load_recent_projects, save_session, load_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
