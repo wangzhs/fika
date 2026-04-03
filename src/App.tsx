@@ -340,47 +340,6 @@ function App() {
     });
   }, []);
 
-  const handleCloseProject = useCallback(() => {
-    if (openTabs.some((t) => t.isDirty)) {
-      const ok = confirm("Unsaved changes will be lost. Close current project?");
-      if (!ok) return;
-    }
-    setRootName(null);
-    setProjectRoot(null);
-    setTree(null);
-    setOpenFolders(new Set());
-    setOpenTabs([]);
-    setActiveTabPath("");
-    setError(null);
-    setRecentFilePaths([]);
-    setFinderOpen(false);
-    setRecentOpen(false);
-    setGlobalSearchOpen(false);
-    setGlobalSearchResults([]);
-    setGlobalSearchQuery("");
-    setSelectedGitFilePath(null);
-    setSelectedDiffFile(null);
-    setFileDiff(null);
-    setSelectedCommit(null);
-    setCommitFiles(null);
-    setCurrentBranch(null);
-    setBranches([]);
-    setGitHistory([]);
-    setGitChanges([]);
-    setStagedFiles([]);
-    setIsGitRepo(false);
-    setIsBottomPanelOpen(false);
-    setNavHistory([]);
-    setNavIndex(-1);
-    pendingOpenPathsRef.current.clear();
-    void saveSession({
-      project_root: null,
-      open_tabs: [],
-      active_tab_path: "",
-      open_folders: [],
-    }).catch(() => {});
-  }, [openTabs]);
-
   // Modified handleOpenFolder to support recent projects
   const handleOpenFolderWithSession = useCallback(async (targetPath?: string) => {
     if (openTabs.some((t) => t.isDirty)) {
@@ -1198,12 +1157,7 @@ function App() {
 
       if (isCloseTab) {
         e.preventDefault();
-        if (!activeTabPath) {
-          if (projectRoot) {
-            handleCloseProject();
-          }
-          return;
-        }
+        if (!activeTabPath) return;
         handleCloseTab(activeTabPath);
         return;
       }
@@ -1286,7 +1240,6 @@ function App() {
     projectRoot,
     tree,
     handleOpenFolder,
-    handleCloseProject,
     handleSave,
     handleSaveAll,
     handleCloseTab,

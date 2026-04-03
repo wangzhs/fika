@@ -273,13 +273,18 @@ body, html, #root {
   min-height: 0;
 }
 
+.code-editor > div {
+  height: 100%;
+  min-height: 0;
+}
+
 .code-editor .cm-editor {
   height: 100%;
   min-height: 0;
 }
 
 .code-editor .cm-scroller {
-  overflow: auto;
+  overflow: auto !important;
   height: 100%;
   min-height: 0;
   overscroll-behavior: contain;
