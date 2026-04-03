@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { dracula } from "@uiw/codemirror-theme-dracula";
+import { EditorView, Decoration, gutter, GutterMarker } from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
@@ -49,6 +51,16 @@ function isMacPlatform() {
   if (typeof navigator === "undefined") return false;
   return /Mac|iPhone|iPad/i.test(navigator.platform);
 }
+
+class ModifiedLineMarker extends GutterMarker {
+  toDOM() {
+    const marker = document.createElement("span");
+    marker.className = "cm-modified-line-marker";
+    return marker;
+  }
+}
+
+const modifiedLineMarker = new ModifiedLineMarker();
 
 function App() {
   const isMac = useMemo(() => isMacPlatform(), []);
@@ -167,6 +179,52 @@ function App() {
     () => openTabs.find((t) => t.path === activeTabPath) || null,
     [openTabs, activeTabPath]
   );
+
+  const modifiedLineNumbers = useMemo(() => {
+    if (!activeTab || !activeTab.isDirty) return new Set<number>();
+    const originalLines = activeTab.originalContent.split("\n");
+    const currentLines = activeTab.content.split("\n");
+    const maxLineCount = Math.max(originalLines.length, currentLines.length);
+    const modifiedLines = new Set<number>();
+
+    for (let index = 0; index < maxLineCount; index += 1) {
+      if (originalLines[index] !== currentLines[index]) {
+        modifiedLines.add(index + 1);
+      }
+    }
+
+    return modifiedLines;
+  }, [activeTab]);
+
+  const modifiedLineExtensions = useMemo(() => {
+    if (!activeTab || modifiedLineNumbers.size === 0) return [];
+
+    const lineDecorations = EditorView.decorations.compute([], (state) => {
+      const builder = new RangeSetBuilder<Decoration>();
+      for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+        if (!modifiedLineNumbers.has(lineNumber)) continue;
+        const line = state.doc.line(lineNumber);
+        builder.add(line.from, line.from, Decoration.line({ class: "cm-line-modified" }));
+      }
+      return builder.finish();
+    });
+
+    const modifiedLineGutter = gutter({
+      class: "cm-modified-gutter",
+      markers: (view) => {
+        const builder = new RangeSetBuilder<GutterMarker>();
+        for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
+          if (!modifiedLineNumbers.has(lineNumber)) continue;
+          const line = view.state.doc.line(lineNumber);
+          builder.add(line.from, line.from, modifiedLineMarker);
+        }
+        return builder.finish();
+      },
+      initialSpacer: () => modifiedLineMarker,
+    });
+
+    return [modifiedLineGutter, lineDecorations];
+  }, [activeTab, modifiedLineNumbers]);
 
   const gitStatusByPath = useMemo(() => {
     const statusMap: Record<string, string> = {};
@@ -355,6 +413,7 @@ function App() {
       const newTab: EditorDocument = {
         path,
         content: "",
+        originalContent: "",
         isDirty: false,
         isLoading: true,
         isSaving: false,
@@ -367,7 +426,7 @@ function App() {
         const content = await readFile(path);
         setOpenTabs((prev) =>
           prev.map((t) =>
-            t.path === path ? { ...t, content, isLoading: false } : t
+            t.path === path ? { ...t, content, originalContent: content, isLoading: false } : t
           )
         );
         updateRecentFiles(path);
@@ -401,7 +460,7 @@ function App() {
       await writeFile(tab.path, tab.content);
       setOpenTabs((prev) =>
         prev.map((t) =>
-          t.path === activeTabPath ? { ...t, isDirty: false, isSaving: false } : t
+          t.path === activeTabPath ? { ...t, originalContent: t.content, isDirty: false, isSaving: false } : t
         )
       );
     } catch (e) {
@@ -446,7 +505,12 @@ function App() {
         if (!success && error) {
           errors.push(`${t.path}: ${error}`);
         }
-        return { ...t, isDirty: success ? false : t.isDirty, isSaving: false };
+        return {
+          ...t,
+          originalContent: success ? t.content : t.originalContent,
+          isDirty: success ? false : t.isDirty,
+          isSaving: false,
+        };
       })
     );
 
@@ -1694,7 +1758,7 @@ function App() {
                 value={activeTab.content}
                 height="100%"
                 theme={dracula}
-                extensions={langFromPath(activeTab.path)}
+                extensions={[...langFromPath(activeTab.path), ...modifiedLineExtensions]}
                 editable={!activeTab.isLoading && !activeTab.isSaving}
                 onChange={(value) =>
                   setOpenTabs((prev) =>

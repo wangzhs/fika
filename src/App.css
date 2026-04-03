@@ -268,10 +268,37 @@ body, html, #root {
 .code-editor {
   flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
 
 .code-editor .cm-editor {
   height: 100%;
+}
+
+.code-editor .cm-scroller {
+  overflow: auto;
+}
+
+.code-editor .cm-content {
+  padding-bottom: 48px;
+}
+
+.code-editor .cm-line-modified {
+  background: rgba(122, 162, 247, 0.09);
+}
+
+.code-editor .cm-modified-gutter {
+  width: 8px;
+}
+
+.code-editor .cm-modified-line-marker {
+  display: block;
+  width: 3px;
+  height: 100%;
+  min-height: 18px;
+  border-radius: 999px;
+  background: #4f8cff;
+  margin-left: 1px;
 }
 
 .code-placeholder {
