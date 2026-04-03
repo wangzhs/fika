@@ -22,7 +22,9 @@ export function TabBar({ tabs, activeTabPath, onSwitchTab, onCloseTab, closeTabT
             onClick={() => onSwitchTab(tab.path)}
             className={`tab-item ${isActive ? "active" : ""}`}
           >
-            <span className="tab-item-label">{fileName}{tab.isDirty ? " ●" : ""}</span>
+            <span className="tab-item-label">
+              <span className="tab-item-name">{fileName}{tab.isDirty ? " ●" : ""}</span>
+            </span>
             <span
               className="tab-item-close"
               onClick={(e) => {

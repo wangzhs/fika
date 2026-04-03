@@ -1033,7 +1033,17 @@ body, html, #root {
 }
 
 .tab-item-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.1;
+}
+
+.tab-item-name {
   font-size: 13px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tab-item-close {

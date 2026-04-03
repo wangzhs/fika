@@ -1,9 +1,12 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{Manager, WindowEvent};
+use tauri::{
+    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
+    Emitter, Manager, WindowEvent,
+};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 #[derive(Default)]
@@ -121,6 +124,11 @@ pub struct SessionState {
     pub active_tab_path: String,
     pub open_folders: Vec<String>,
 }
+
+const MENU_OPEN_FOLDER: &str = "file_open_folder";
+const MENU_OPEN_RECENT: &str = "file_open_recent";
+const MENU_OPEN_FOLDER_NEW_WINDOW: &str = "file_open_folder_new_window";
+const MENU_CLOSE_TAB: &str = "file_close_tab";
 
 #[tauri::command]
 async fn open_folder(handle: tauri::AppHandle) -> Result<Option<FolderResult>, String> {
@@ -1111,12 +1119,140 @@ async fn load_session(app_handle: tauri::AppHandle) -> Result<SessionState, Stri
     Ok(valid_state)
 }
 
+fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let pkg_info = app.package_info();
+    let config = app.config();
+    let about_metadata = AboutMetadata {
+        name: Some(pkg_info.name.clone()),
+        version: Some(pkg_info.version.to_string()),
+        copyright: config.bundle.copyright.clone(),
+        authors: config.bundle.publisher.clone().map(|publisher| vec![publisher]),
+        ..Default::default()
+    };
+
+    let app_menu = Submenu::with_items(
+        app,
+        pkg_info.name.clone(),
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, Some(about_metadata))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, None)?,
+        ],
+    )?;
+
+    let file_menu = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[
+            &MenuItem::with_id(app, MENU_OPEN_FOLDER, "Open Folder…", true, Some("CmdOrCtrl+O"))?,
+            &MenuItem::with_id(
+                app,
+                MENU_OPEN_RECENT,
+                "Open Recent…",
+                true,
+                Some("CmdOrCtrl+Shift+O"),
+            )?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(
+                app,
+                MENU_OPEN_FOLDER_NEW_WINDOW,
+                "Open Folder in New Window…",
+                true,
+                None::<&str>,
+            )?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, MENU_CLOSE_TAB, "Close Tab", true, Some("CmdOrCtrl+W"))?,
+        ],
+    )?;
+
+    let edit_menu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    let view_menu = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[&PredefinedMenuItem::fullscreen(app, None)?],
+    )?;
+
+    let window_menu = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, None)?,
+        ],
+    )?;
+
+    let help_menu = Submenu::with_items(app, "Help", true, &[])?;
+
+    Menu::with_items(
+        app,
+        &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu, &help_menu],
+    )
+}
+
+fn emit_menu_event(app: &tauri::AppHandle, event: &str) {
+    let target = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.is_focused().unwrap_or(false))
+        .or_else(|| app.webview_windows().into_values().next());
+
+    if let Some(window) = target {
+        let _ = window.emit(event, ());
+    }
+}
+
+fn eval_in_focused_window(app: &tauri::AppHandle, script: &str) {
+    let target = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.is_focused().unwrap_or(false))
+        .or_else(|| app.webview_windows().into_values().next());
+
+    if let Some(window) = target {
+        let _ = window.eval(script);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(CloseGuard::default())
+        .menu(|app| build_app_menu(app))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            MENU_OPEN_FOLDER => emit_menu_event(app, "fika://menu-open-folder"),
+            MENU_OPEN_RECENT => emit_menu_event(app, "fika://show-recent-projects"),
+            MENU_OPEN_FOLDER_NEW_WINDOW => {
+                emit_menu_event(app, "fika://menu-open-folder-new-window")
+            }
+            MENU_CLOSE_TAB => eval_in_focused_window(app, "window.__FIKA_CLOSE_ACTIVE_TAB__?.()"),
+            _ => {}
+        })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let guard = window.state::<CloseGuard>();

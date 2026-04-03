@@ -21,6 +21,8 @@ import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
 import { collectFilePaths } from "./utils/tree";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { emitTo } from "@tauri-apps/api/event";
 
 function computeModifiedLineNumbers(originalContent: string, currentContent: string) {
   const originalLines = originalContent.split("\n");
@@ -117,6 +119,13 @@ function toProjectRelativePathValue(projectRoot: string | null, absolutePath: st
 function isMacPlatform() {
   if (typeof navigator === "undefined") return false;
   return /Mac|iPhone|iPad/i.test(navigator.platform);
+}
+
+declare global {
+  interface Window {
+    __FIKA_CLOSE_ACTIVE_TAB__?: () => void;
+    __FIKA_SESSION_RESTORED__?: boolean;
+  }
 }
 
 function App() {
@@ -505,6 +514,12 @@ function App() {
       // Clear navigation history
       setNavHistory([]);
       setNavIndex(-1);
+      const [changes, staged] = await Promise.all([
+        getWorkingTreeChanges(result.root).catch(() => []),
+        getStagedFiles(result.root).catch(() => []),
+      ]);
+      setGitChanges(changes);
+      setStagedFiles(staged);
     } catch (e) {
       setError(String(e));
     }
@@ -513,6 +528,38 @@ function App() {
   const handleOpenFolder = useCallback(async () => {
     await handleOpenFolderWithSession();
   }, [handleOpenFolderWithSession]);
+
+  const createProjectWindow = useCallback(async (targetPath?: string) => {
+    let projectPath = targetPath;
+    if (!projectPath) {
+      const result = await openFolder();
+      if (!result) return;
+      projectPath = result.root;
+    }
+
+    const label = `project-${Date.now()}`;
+    const storageKey = `fika:pending-project:${label}`;
+    localStorage.setItem(storageKey, projectPath);
+
+    const nextWindow = new WebviewWindow(label, {
+      title: "fika",
+      width: 1440,
+      height: 900,
+      minWidth: 1100,
+      minHeight: 720,
+    });
+
+    nextWindow.once("tauri://created", () => {
+      setTimeout(() => {
+        void emitTo({ kind: "WebviewWindow", label }, "fika://open-project-path", projectPath);
+      }, 250);
+    });
+
+    nextWindow.once("tauri://error", () => {
+      localStorage.removeItem(storageKey);
+      setError("Failed to open a new project window");
+    });
+  }, []);
 
   // Navigation history handlers
   const addToNavHistory = useCallback((path: string, line?: number) => {
@@ -539,7 +586,7 @@ function App() {
   }, [navIndex]);
 
   const handleOpenFile = useCallback(
-    async (path: string, lineNumber?: number) => {
+    async (path: string, lineNumber?: number, _source = "unknown") => {
       if (!path) return;
       const existing = openTabs.find((t) => t.path === path);
       if (existing) {
@@ -576,7 +623,7 @@ function App() {
             ? prev.map((t) =>
                 t.path === path ? { ...t, content, originalContent: content, isLoading: false } : t
               )
-            : [...prev, { ...newTab, content, originalContent: content, isLoading: false }]
+            : prev
         );
         setSelectedTreePath(path);
         updateRecentFiles(path);
@@ -700,23 +747,47 @@ function App() {
         }
       }
 
-      const idx = openTabs.findIndex((t) => t.path === path);
-      const nextTabs = openTabs.filter((t) => t.path !== path);
-      setOpenTabs(nextTabs);
-      if (activeTabPath === path) {
-        if (nextTabs.length === 0) {
-          setActiveTabPath("");
-        } else {
-          const next =
-            nextTabs[Math.min(idx, nextTabs.length - 1)] ||
-            nextTabs[nextTabs.length - 1];
-          setActiveTabPath(next.path);
+      let removed = false;
+      setOpenTabs((prev) => {
+        const idx = prev.findIndex((t) => t.path === path);
+        if (idx === -1) {
+          return prev;
         }
-      }
+
+        const nextTabs = prev.filter((t) => t.path !== path);
+        removed = true;
+        const next =
+          nextTabs[Math.min(idx, nextTabs.length - 1)] ||
+          nextTabs[nextTabs.length - 1] ||
+          null;
+
+        setActiveTabPath((current) => {
+          if (current !== path) return current;
+          return next?.path ?? "";
+        });
+        setSelectedTreePath((current) => {
+          if (current !== path) return current;
+          return next?.path ?? projectRoot ?? "";
+        });
+        return nextTabs;
+      });
+
+      if (!removed) return;
       await refreshGitWorkingTreeState();
     },
-    [openTabs, activeTabPath, getEditorContent, refreshGitWorkingTreeState]
+    [openTabs, activeTabPath, getEditorContent, refreshGitWorkingTreeState, projectRoot, selectedTreePath]
   );
+
+  useEffect(() => {
+    window.__FIKA_CLOSE_ACTIVE_TAB__ = () => {
+      if (!activeTabPath) return;
+      void handleCloseTab(activeTabPath);
+    };
+
+    return () => {
+      delete window.__FIKA_CLOSE_ACTIVE_TAB__;
+    };
+  }, [activeTabPath, handleCloseTab]);
 
   const editorKeybindings = useMemo(
     () =>
@@ -1115,10 +1186,10 @@ function App() {
   const goBack = useCallback(() => {
     if (navIndex <= 0) return;
     isNavigatingRef.current = true;
-    const entry = navHistory[navIndex - 1];
+      const entry = navHistory[navIndex - 1];
     if (entry) {
       setNavIndex(navIndex - 1);
-      void handleOpenFile(entry.path, entry.line);
+      void handleOpenFile(entry.path, entry.line, "nav-back");
     }
   }, [navIndex, navHistory, handleOpenFile]);
 
@@ -1128,7 +1199,7 @@ function App() {
     const entry = navHistory[navIndex + 1];
     if (entry) {
       setNavIndex(navIndex + 1);
-      void handleOpenFile(entry.path, entry.line);
+      void handleOpenFile(entry.path, entry.line, "nav-forward");
     }
   }, [navIndex, navHistory, handleOpenFile]);
 
@@ -1142,7 +1213,7 @@ function App() {
       const newTree = await refreshTree(projectRoot);
       setTree(newTree);
       // Open the new file
-      await handleOpenFile(fullPath);
+      await handleOpenFile(fullPath, undefined, "create-file");
     } catch (e) {
       setError(String(e));
     }
@@ -1264,7 +1335,19 @@ function App() {
 
   // Load session on mount
   useEffect(() => {
+    if (window.__FIKA_SESSION_RESTORED__) return;
+    window.__FIKA_SESSION_RESTORED__ = true;
+
     const init = async () => {
+      const currentLabel = getCurrentWebviewWindow().label;
+      const pendingProjectKey = `fika:pending-project:${currentLabel}`;
+      const pendingProjectPath = localStorage.getItem(pendingProjectKey);
+      if (pendingProjectPath) {
+        localStorage.removeItem(pendingProjectKey);
+        await handleOpenFolderWithSession(pendingProjectPath);
+        return;
+      }
+
       const session = await loadSession().catch(() => null);
       if (session?.project_root) {
         try {
@@ -1275,19 +1358,63 @@ function App() {
           setOpenFolders(new Set(session.open_folders));
           // Open tabs
           for (const path of session.open_tabs) {
-            await handleOpenFile(path);
+            await handleOpenFile(path, undefined, "session-restore");
           }
           // Set active tab
           if (session.active_tab_path) {
             setActiveTabPath(session.active_tab_path);
           }
+          const [changes, staged] = await Promise.all([
+            getWorkingTreeChanges(session.project_root).catch(() => []),
+            getStagedFiles(session.project_root).catch(() => []),
+          ]);
+          setGitChanges(changes);
+          setStagedFiles(staged);
         } catch {
           // Session loading failed, start fresh
         }
       }
     };
     init();
-  }, []);
+  }, [handleOpenFile, handleOpenFolderWithSession]);
+
+  useEffect(() => {
+    let unlistenOpenProject: (() => void) | undefined;
+    let unlistenShowRecent: (() => void) | undefined;
+    let unlistenMenuOpenFolder: (() => void) | undefined;
+    let unlistenMenuOpenFolderNewWindow: (() => void) | undefined;
+
+    getCurrentWindow().listen<string>("fika://open-project-path", async (event) => {
+      await handleOpenFolderWithSession(event.payload);
+    }).then((unlisten) => {
+      unlistenOpenProject = unlisten;
+    });
+
+    getCurrentWindow().listen("fika://show-recent-projects", () => {
+      setRecentProjectsOpen(true);
+    }).then((unlisten) => {
+      unlistenShowRecent = unlisten;
+    });
+
+    getCurrentWindow().listen("fika://menu-open-folder", () => {
+      void handleOpenFolder();
+    }).then((unlisten) => {
+      unlistenMenuOpenFolder = unlisten;
+    });
+
+    getCurrentWindow().listen("fika://menu-open-folder-new-window", () => {
+      void createProjectWindow();
+    }).then((unlisten) => {
+      unlistenMenuOpenFolderNewWindow = unlisten;
+    });
+
+    return () => {
+      unlistenOpenProject?.();
+      unlistenShowRecent?.();
+      unlistenMenuOpenFolder?.();
+      unlistenMenuOpenFolderNewWindow?.();
+    };
+  }, [createProjectWindow, handleOpenFolder, handleOpenFolderWithSession]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -1334,8 +1461,6 @@ function App() {
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      const isOpenFolder =
-        (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o";
       const isFindFile =
         (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "n";
       const isSaveAll =
@@ -1386,7 +1511,7 @@ function App() {
             e.preventDefault();
             if (globalSearchResults[globalSelectedIndex]) {
               const result = globalSearchResults[globalSelectedIndex];
-              handleOpenFile(result.path, result.line_number);
+              handleOpenFile(result.path, result.line_number, "global-search-enter");
               setGlobalSearchOpen(false);
             }
             return;
@@ -1430,7 +1555,7 @@ function App() {
           case "Enter":
             e.preventDefault();
             if (recentFilePaths[recentSelectedIndex]) {
-              handleOpenFile(recentFilePaths[recentSelectedIndex]);
+              handleOpenFile(recentFilePaths[recentSelectedIndex], undefined, "recent-files-enter");
               setRecentOpen(false);
             }
             return;
@@ -1455,7 +1580,7 @@ function App() {
           case "Enter":
             e.preventDefault();
             if (filtered[selectedIndex]) {
-              handleOpenFile(filtered[selectedIndex]);
+              handleOpenFile(filtered[selectedIndex], undefined, "find-file-enter");
               setFinderOpen(false);
             }
             return;
@@ -1463,12 +1588,6 @@ function App() {
       }
 
       // Global shortcuts
-      if (isOpenFolder) {
-        e.preventDefault();
-        handleOpenFolder();
-        return;
-      }
-
       if (isSaveAll) {
         e.preventDefault();
         handleSaveAll();
@@ -1493,6 +1612,10 @@ function App() {
 
       if (isCloseTab) {
         e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === "function") {
+          e.stopImmediatePropagation();
+        }
         if (!activeTabPath) return;
         handleCloseTab(activeTabPath);
         return;
@@ -1636,7 +1759,7 @@ function App() {
                   className={`finder-item ${idx === selectedIndex ? "active" : ""}`}
                   onMouseEnter={() => setSelectedIndex(idx)}
                   onClick={() => {
-                    handleOpenFile(p);
+                    handleOpenFile(p, undefined, "find-file-click");
                     setFinderOpen(false);
                   }}
                 >
@@ -1668,7 +1791,7 @@ function App() {
                   className={`finder-item ${idx === recentSelectedIndex ? "active" : ""}`}
                   onMouseEnter={() => setRecentSelectedIndex(idx)}
                   onClick={() => {
-                    handleOpenFile(p);
+                    handleOpenFile(p, undefined, "recent-files-click");
                     setRecentOpen(false);
                   }}
                 >
@@ -1763,7 +1886,7 @@ function App() {
                     className={`search-result-item ${idx === globalSelectedIndex ? "active" : ""}`}
                     onMouseEnter={() => setGlobalSelectedIndex(idx)}
                     onClick={() => {
-                      handleOpenFile(result.path, result.line_number);
+                      handleOpenFile(result.path, result.line_number, "global-search-click");
                       setGlobalSearchOpen(false);
                     }}
                   >
@@ -2006,10 +2129,10 @@ function App() {
             <button
               className="titlebar-action"
               onClick={handleOpenGitHistory}
-              title="Open Git history"
+              title="Open Git tools"
             >
               <span className="titlebar-action-icon">◷</span>
-              <span>History</span>
+              <span>Git</span>
             </button>
           </div>
         )}
@@ -2488,7 +2611,7 @@ function App() {
                           key={file.path}
                           className={`changed-file-item ${selectedGitFilePath === file.path ? "selected" : ""}`}
                           onClick={() => setSelectedGitFilePath(file.path)}
-                          onDoubleClick={() => void handleOpenFile(file.path)}
+                          onDoubleClick={() => void handleOpenFile(file.path, undefined, "git-log-file-double-click")}
                         >
                           <span className={`file-status status-${file.status}`}>{file.status}</span>
                           <span className="file-path">{file.path}</span>

@@ -12,7 +12,7 @@ interface FileTreeProps {
   selectedPath: string;
   projectRoot?: string | null;
   gitStatusByPath?: Record<string, GitFileStatus>;
-  onSelectFile: (path: string) => void;
+  onSelectFile: (path: string, lineNumber?: number, source?: string) => void;
   onSelectPath: (path: string, isDir: boolean) => void;
   onContextMenu?: (path: string, isDir: boolean, e: React.MouseEvent) => void;
 }
@@ -43,7 +43,7 @@ export function FileTree({
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => {
           onSelectPath(node.path, false);
-          onSelectFile(node.path);
+          onSelectFile(node.path, undefined, "file-tree-click");
         }}
         onContextMenu={(e) => onContextMenu?.(node.path, false, e)}
       >
