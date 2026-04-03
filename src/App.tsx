@@ -1448,26 +1448,6 @@ function App() {
           </div>
         </div>
         <div className="spacer" />
-        <div className="titlebar-actions">
-          <div className="toolbar-group">
-            <button
-              className="icon-btn toolbar-btn"
-              title={`Back (${shortcutLabel(isMac ? "←" : "Left")})`}
-              onClick={goBack}
-              disabled={navIndex <= 0}
-            >
-              <span className="toolbar-btn-icon">←</span>
-            </button>
-            <button
-              className="icon-btn toolbar-btn"
-              title={`Forward (${shortcutLabel(isMac ? "→" : "Right")})`}
-              onClick={goForward}
-              disabled={navIndex >= navHistory.length - 1}
-            >
-              <span className="toolbar-btn-icon">→</span>
-            </button>
-          </div>
-        </div>
       </header>
 
       <div className="main">
