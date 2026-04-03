@@ -324,6 +324,14 @@ body, html, #root {
   background: rgba(122, 162, 247, 0.09);
 }
 
+.code-editor .cm-line-added {
+  background: rgba(126, 231, 135, 0.08);
+}
+
+.code-editor .cm-line-deleted-anchor {
+  background: rgba(248, 113, 113, 0.08);
+}
+
 .code-editor .cm-modified-gutter {
   width: 8px;
 }
@@ -335,6 +343,26 @@ body, html, #root {
   min-height: 18px;
   border-radius: 999px;
   background: #4f8cff;
+  margin-left: 1px;
+}
+
+.code-editor .cm-added-line-marker {
+  display: block;
+  width: 3px;
+  height: 100%;
+  min-height: 18px;
+  border-radius: 999px;
+  background: #4caf50;
+  margin-left: 1px;
+}
+
+.code-editor .cm-deleted-line-marker {
+  display: block;
+  width: 3px;
+  height: 100%;
+  min-height: 18px;
+  border-radius: 999px;
+  background: #ff6b6b;
   margin-left: 1px;
 }
 

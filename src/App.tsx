@@ -59,14 +59,20 @@ function computeModifiedLineNumbers(originalContent: string, currentContent: str
 }
 
 class ModifiedLineMarker extends GutterMarker {
+  constructor(private readonly className = "cm-modified-line-marker") {
+    super();
+  }
+
   toDOM() {
     const marker = document.createElement("span");
-    marker.className = "cm-modified-line-marker";
+    marker.className = this.className;
     return marker;
   }
 }
 
 const modifiedLineMarker = new ModifiedLineMarker();
+const addedLineMarker = new ModifiedLineMarker("cm-added-line-marker");
+const deletedLineMarker = new ModifiedLineMarker("cm-deleted-line-marker");
 
 function langFromPath(path: string) {
   const p = path.toLowerCase();
@@ -156,6 +162,7 @@ function App() {
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
   const [selectedGitFilePath, setSelectedGitFilePath] = useState<string | null>(null);
   const [fileDiff, setFileDiff] = useState<FileDiff | null>(null);
+  const [activeEditorGitDiff, setActiveEditorGitDiff] = useState<FileDiff | null>(null);
   const [diffSourceTab, setDiffSourceTab] = useState<"diff" | "log">("diff");
   const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false);
   const [isGitRepo, setIsGitRepo] = useState(false);
@@ -202,6 +209,13 @@ function App() {
     return `${newBase}${suffix}`;
   }, []);
 
+  const toProjectRelativePath = useCallback((absolutePath: string) => {
+    if (!projectRoot) return absolutePath;
+    if (!absolutePath.startsWith(projectRoot)) return absolutePath;
+    const suffix = absolutePath.slice(projectRoot.length);
+    return suffix.replace(/^[/\\]/, "");
+  }, [projectRoot]);
+
   const allFilePaths = useMemo(() => {
     if (!tree) return [];
     return collectFilePaths(tree);
@@ -233,20 +247,74 @@ function App() {
     [openTabs, hasUnsavedChangesForPath]
   );
 
-  const modifiedLineNumbers = useMemo(() => {
-    if (!activeTab || !activeTab.isDirty) return new Set<number>();
-    return computeModifiedLineNumbers(activeTab.originalContent, activeTab.content);
-  }, [activeTab]);
+  const lineChangeSets = useMemo(() => {
+    const modified = new Set<number>();
+    const added = new Set<number>();
+    const deleted = new Set<number>();
+
+    if (activeEditorGitDiff?.hunks.length) {
+      for (const hunk of activeEditorGitDiff.hunks) {
+        let pendingDeleted = 0;
+        let deleteAnchor = hunk.new_start;
+
+        for (const line of hunk.lines) {
+          if (line.kind === " ") {
+            if (pendingDeleted > 0) {
+              deleted.add(Math.max(1, deleteAnchor));
+              pendingDeleted = 0;
+            }
+            continue;
+          }
+
+          if (line.kind === "-") {
+            pendingDeleted += 1;
+            deleteAnchor = line.new_line ?? deleteAnchor;
+            continue;
+          }
+
+          if (line.kind === "+") {
+            if (pendingDeleted > 0) {
+              if (line.new_line) modified.add(line.new_line);
+              pendingDeleted -= 1;
+            } else if (line.new_line) {
+              added.add(line.new_line);
+            }
+          }
+        }
+
+        if (pendingDeleted > 0) {
+          deleted.add(Math.max(1, deleteAnchor));
+        }
+      }
+    } else if (activeTab?.isDirty) {
+      for (const lineNumber of computeModifiedLineNumbers(activeTab.originalContent, activeTab.content)) {
+        modified.add(lineNumber);
+      }
+    }
+
+    return { modified, added, deleted };
+  }, [activeEditorGitDiff, activeTab]);
 
   const modifiedLineExtensions = useMemo(() => {
-    if (!activeTab || modifiedLineNumbers.size === 0) return [];
+    if (
+      !activeTab ||
+      (lineChangeSets.modified.size === 0 &&
+        lineChangeSets.added.size === 0 &&
+        lineChangeSets.deleted.size === 0)
+    ) {
+      return [];
+    }
 
     const lineDecorations = EditorView.decorations.compute([], (state) => {
       const builder = new RangeSetBuilder<Decoration>();
       for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
-        if (!modifiedLineNumbers.has(lineNumber)) continue;
+        let className = "";
+        if (lineChangeSets.modified.has(lineNumber)) className = "cm-line-modified";
+        else if (lineChangeSets.added.has(lineNumber)) className = "cm-line-added";
+        else if (lineChangeSets.deleted.has(lineNumber)) className = "cm-line-deleted-anchor";
+        if (!className) continue;
         const line = state.doc.line(lineNumber);
-        builder.add(line.from, line.from, Decoration.line({ class: "cm-line-modified" }));
+        builder.add(line.from, line.from, Decoration.line({ class: className }));
       }
       return builder.finish();
     });
@@ -256,9 +324,13 @@ function App() {
       markers: (view) => {
         const builder = new RangeSetBuilder<GutterMarker>();
         for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
-          if (!modifiedLineNumbers.has(lineNumber)) continue;
+          let marker: GutterMarker | null = null;
+          if (lineChangeSets.modified.has(lineNumber)) marker = modifiedLineMarker;
+          else if (lineChangeSets.added.has(lineNumber)) marker = addedLineMarker;
+          else if (lineChangeSets.deleted.has(lineNumber)) marker = deletedLineMarker;
+          if (!marker) continue;
           const line = view.state.doc.line(lineNumber);
-          builder.add(line.from, line.from, modifiedLineMarker);
+          builder.add(line.from, line.from, marker);
         }
         return builder.finish();
       },
@@ -266,7 +338,7 @@ function App() {
     });
 
     return [modifiedLineGutter, lineDecorations];
-  }, [activeTab, modifiedLineNumbers]);
+  }, [activeTab, lineChangeSets]);
 
   const gitStatusByPath = useMemo(() => {
     const statusMap: Record<string, string> = {};
@@ -790,6 +862,39 @@ function App() {
       });
     }
   }, [bottomPanelTab, projectRoot, isGitRepo]);
+
+  useEffect(() => {
+    if (!projectRoot || !isGitRepo || !activeTab) {
+      setActiveEditorGitDiff(null);
+      return;
+    }
+
+    const currentStatus = gitStatusByPath[activeTab.path];
+    if (!currentStatus) {
+      setActiveEditorGitDiff(null);
+      return;
+    }
+
+    const relativePath = toProjectRelativePath(activeTab.path);
+    const isStagedOnly =
+      stagedFiles.some((file) => file.path === relativePath) &&
+      !gitChanges.some((file) => file.path === relativePath);
+
+    let cancelled = false;
+
+    getFileDiff(projectRoot, relativePath, isStagedOnly)
+      .then((diff) => {
+        if (cancelled) return;
+        setActiveEditorGitDiff(diff);
+      })
+      .catch(() => {
+        if (!cancelled) setActiveEditorGitDiff(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, gitChanges, gitStatusByPath, isGitRepo, projectRoot, stagedFiles, toProjectRelativePath]);
 
   // Load blame when switching to blame tab
   useEffect(() => {
