@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { dracula } from "@uiw/codemirror-theme-dracula";
-import { EditorView, Decoration, gutter, GutterMarker } from "@codemirror/view";
+import { EditorView, Decoration, gutter, GutterMarker, WidgetType } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
@@ -52,7 +52,7 @@ function isMacPlatform() {
   return /Mac|iPhone|iPad/i.test(navigator.platform);
 }
 
-function computeModifiedLineNumbers(originalContent: string, currentContent: string) {
+function computeLineChangeSet(originalContent: string, currentContent: string) {
   const originalLines = originalContent.split("\n");
   const currentLines = currentContent.split("\n");
 
@@ -77,15 +77,35 @@ function computeModifiedLineNumbers(originalContent: string, currentContent: str
   }
 
   const modifiedLines = new Set<number>();
-  if (currentSuffix < prefixLength) {
-    return modifiedLines;
+  const addedLines = new Set<number>();
+  const deletedAnchors: Array<{ line: number; count: number }> = [];
+
+  if (currentSuffix < prefixLength && originalSuffix < prefixLength) {
+    return { modifiedLines, addedLines, deletedAnchors };
   }
 
-  for (let lineNumber = prefixLength + 1; lineNumber <= currentSuffix + 1; lineNumber += 1) {
-    modifiedLines.add(lineNumber);
+  const originalChangedCount = Math.max(0, originalSuffix - prefixLength + 1);
+  const currentChangedCount = Math.max(0, currentSuffix - prefixLength + 1);
+  const overlapCount = Math.min(originalChangedCount, currentChangedCount);
+
+  for (let offset = 0; offset < overlapCount; offset += 1) {
+    modifiedLines.add(prefixLength + offset + 1);
   }
 
-  return modifiedLines;
+  if (currentChangedCount > overlapCount) {
+    for (let offset = overlapCount; offset < currentChangedCount; offset += 1) {
+      addedLines.add(prefixLength + offset + 1);
+    }
+  }
+
+  if (originalChangedCount > overlapCount) {
+    deletedAnchors.push({
+      line: Math.min(prefixLength + overlapCount + 1, currentLines.length + 1),
+      count: originalChangedCount - overlapCount,
+    });
+  }
+
+  return { modifiedLines, addedLines, deletedAnchors };
 }
 
 class ModifiedLineMarker extends GutterMarker {
@@ -97,6 +117,29 @@ class ModifiedLineMarker extends GutterMarker {
 }
 
 const modifiedLineMarker = new ModifiedLineMarker();
+
+class AddedLineMarker extends GutterMarker {
+  toDOM() {
+    const marker = document.createElement("span");
+    marker.className = "cm-added-line-marker";
+    return marker;
+  }
+}
+
+const addedLineMarker = new AddedLineMarker();
+
+class DeletedBlockWidget extends WidgetType {
+  constructor(private count: number) {
+    super();
+  }
+
+  toDOM() {
+    const wrapper = document.createElement("div");
+    wrapper.className = "cm-deleted-block-widget";
+    wrapper.textContent = `Deleted ${this.count} line${this.count > 1 ? "s" : ""}`;
+    return wrapper;
+  }
+}
 
 function App() {
   const isMac = useMemo(() => isMacPlatform(), []);
@@ -217,40 +260,81 @@ function App() {
     [openTabs, activeTabPath]
   );
 
-  const modifiedLineNumbers = useMemo(() => {
-    if (!activeTab || !activeTab.isDirty) return new Set<number>();
-    return computeModifiedLineNumbers(activeTab.originalContent, activeTab.content);
+  const lineChangeSet = useMemo(() => {
+    if (!activeTab || !activeTab.isDirty) {
+      return {
+        modifiedLines: new Set<number>(),
+        addedLines: new Set<number>(),
+        deletedAnchors: [] as Array<{ line: number; count: number }>,
+      };
+    }
+    return computeLineChangeSet(activeTab.originalContent, activeTab.content);
   }, [activeTab]);
 
   const modifiedLineExtensions = useMemo(() => {
-    if (!activeTab || modifiedLineNumbers.size === 0) return [];
+    if (
+      !activeTab ||
+      (
+        lineChangeSet.modifiedLines.size === 0 &&
+        lineChangeSet.addedLines.size === 0 &&
+        lineChangeSet.deletedAnchors.length === 0
+      )
+    ) {
+      return [];
+    }
 
     const lineDecorations = EditorView.decorations.compute([], (state) => {
       const builder = new RangeSetBuilder<Decoration>();
       for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
-        if (!modifiedLineNumbers.has(lineNumber)) continue;
+        if (!lineChangeSet.modifiedLines.has(lineNumber) && !lineChangeSet.addedLines.has(lineNumber)) continue;
         const line = state.doc.line(lineNumber);
-        builder.add(line.from, line.from, Decoration.line({ class: "cm-line-modified" }));
+        builder.add(
+          line.from,
+          line.from,
+          Decoration.line({
+            class: lineChangeSet.addedLines.has(lineNumber) ? "cm-line-added" : "cm-line-modified",
+          })
+        );
+      }
+
+      for (const anchor of lineChangeSet.deletedAnchors) {
+        const position =
+          anchor.line > state.doc.lines
+            ? state.doc.length
+            : state.doc.line(anchor.line).from;
+        builder.add(
+          position,
+          position,
+          Decoration.widget({
+            widget: new DeletedBlockWidget(anchor.count),
+            block: true,
+            side: -1,
+          })
+        );
       }
       return builder.finish();
     });
 
-    const modifiedLineGutter = gutter({
+    const changedLineGutter = gutter({
       class: "cm-modified-gutter",
       markers: (view) => {
         const builder = new RangeSetBuilder<GutterMarker>();
         for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
-          if (!modifiedLineNumbers.has(lineNumber)) continue;
+          if (!lineChangeSet.modifiedLines.has(lineNumber) && !lineChangeSet.addedLines.has(lineNumber)) continue;
           const line = view.state.doc.line(lineNumber);
-          builder.add(line.from, line.from, modifiedLineMarker);
+          builder.add(
+            line.from,
+            line.from,
+            lineChangeSet.addedLines.has(lineNumber) ? addedLineMarker : modifiedLineMarker
+          );
         }
         return builder.finish();
       },
       initialSpacer: () => modifiedLineMarker,
     });
 
-    return [modifiedLineGutter, lineDecorations];
-  }, [activeTab, modifiedLineNumbers]);
+    return [changedLineGutter, lineDecorations];
+  }, [activeTab, lineChangeSet]);
 
   const gitStatusByPath = useMemo(() => {
     const statusMap: Record<string, string> = {};
@@ -487,15 +571,23 @@ function App() {
   const handleSave = useCallback(async () => {
     const tab = openTabs.find((t) => t.path === activeTabPath);
     if (!tab || !tab.isDirty || tab.isLoading || tab.isSaving) return;
+    const snapshotContent = tab.content;
     setOpenTabs((prev) =>
       prev.map((t) => (t.path === activeTabPath ? { ...t, isSaving: true } : t))
     );
     setError(null);
     try {
-      await writeFile(tab.path, tab.content);
+      await writeFile(tab.path, snapshotContent);
       setOpenTabs((prev) =>
         prev.map((t) =>
-          t.path === activeTabPath ? { ...t, originalContent: t.content, isDirty: false, isSaving: false } : t
+          t.path === activeTabPath
+            ? {
+                ...t,
+                originalContent: snapshotContent,
+                isDirty: t.content !== snapshotContent,
+                isSaving: false,
+              }
+            : t
         )
       );
     } catch (e) {
@@ -521,9 +613,9 @@ function App() {
       dirtyTabs.map(async (tab) => {
         try {
           await writeFile(tab.path, tab.content);
-          return { path: tab.path, success: true, error: null };
+          return { path: tab.path, content: tab.content, success: true, error: null };
         } catch (e) {
-          return { path: tab.path, success: false, error: String(e) };
+          return { path: tab.path, content: tab.content, success: false, error: String(e) };
         }
       })
     );
@@ -536,14 +628,14 @@ function App() {
         if (!savedPaths.has(t.path)) return t;
         const result = results.find((r) => r.status === "fulfilled" && r.value.path === t.path);
         if (!result) return { ...t, isSaving: false };
-        const { success, error } = (result as PromiseFulfilledResult<{ path: string; success: boolean; error: string | null }>).value;
+        const { success, error, content } = (result as PromiseFulfilledResult<{ path: string; content: string; success: boolean; error: string | null }>).value;
         if (!success && error) {
           errors.push(`${t.path}: ${error}`);
         }
         return {
           ...t,
-          originalContent: success ? t.content : t.originalContent,
-          isDirty: success ? false : t.isDirty,
+          originalContent: success ? content : t.originalContent,
+          isDirty: success ? t.content !== content : t.isDirty,
           isSaving: false,
         };
       })
@@ -552,6 +644,60 @@ function App() {
     if (errors.length > 0) {
       setError(`Save all failed for some files:\n${errors.join("\n")}`);
     }
+  }, [openTabs]);
+
+  useEffect(() => {
+    const dirtyTabs = openTabs.filter((t) => t.isDirty && !t.isLoading && !t.isSaving);
+    if (dirtyTabs.length === 0) return;
+
+    const timeoutId = window.setTimeout(() => {
+      const snapshotTabs = dirtyTabs.map((tab) => ({ path: tab.path, content: tab.content }));
+      const snapshotPaths = new Set(snapshotTabs.map((tab) => tab.path));
+
+      setOpenTabs((prev) =>
+        prev.map((tab) =>
+          snapshotPaths.has(tab.path) ? { ...tab, isSaving: true } : tab
+        )
+      );
+
+      void Promise.allSettled(
+        snapshotTabs.map(async (tab) => {
+          try {
+            await writeFile(tab.path, tab.content);
+            return { path: tab.path, content: tab.content, success: true, error: null };
+          } catch (e) {
+            return { path: tab.path, content: tab.content, success: false, error: String(e) };
+          }
+        })
+      ).then((results) => {
+        const errors: string[] = [];
+        setOpenTabs((prev) =>
+          prev.map((tab) => {
+            if (!snapshotPaths.has(tab.path)) return tab;
+            const result = results.find(
+              (item) => item.status === "fulfilled" && item.value.path === tab.path
+            );
+            if (!result || result.status !== "fulfilled") return { ...tab, isSaving: false };
+            const { success, error, content } = result.value;
+            if (!success && error) {
+              errors.push(`${tab.path}: ${error}`);
+            }
+            return {
+              ...tab,
+              originalContent: success ? content : tab.originalContent,
+              isDirty: success ? tab.content !== content : tab.isDirty,
+              isSaving: false,
+            };
+          })
+        );
+
+        if (errors.length > 0) {
+          setError(`Auto-save failed for some files:\n${errors.join("\n")}`);
+        }
+      });
+    }, 900);
+
+    return () => window.clearTimeout(timeoutId);
   }, [openTabs]);
 
   const handleSwitchTab = useCallback((path: string) => {
