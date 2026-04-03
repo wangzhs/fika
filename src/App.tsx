@@ -1487,11 +1487,6 @@ function App() {
         >
           Files
         </button>
-        <div className="window-controls">
-          <button>─</button>
-          <button>□</button>
-          <button>✕</button>
-        </div>
       </header>
 
       <div className="main">

@@ -35,7 +35,7 @@ body, html, #root {
 
 .titlebar .logo,
 .titlebar .icon-btn,
-.titlebar .window-controls {
+.titlebar .branch-badge {
   -webkit-app-region: no-drag;
 }
 
@@ -73,26 +73,6 @@ body, html, #root {
 .icon-btn:hover {
   color: #ffffff;
   background: #3c3c3c;
-}
-
-.window-controls {
-  display: flex;
-  gap: 2px;
-}
-
-.window-controls button {
-  background: transparent;
-  border: none;
-  color: #bbbbbb;
-  cursor: pointer;
-  padding: 4px 10px;
-  font-size: 12px;
-  border-radius: 4px;
-}
-
-.window-controls button:hover {
-  background: #4b6eaf;
-  color: #fff;
 }
 
 .main {
