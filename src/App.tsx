@@ -141,6 +141,64 @@ class DeletedBlockWidget extends WidgetType {
   }
 }
 
+function computeLineChangeSetFromDiff(diff: FileDiff | null) {
+  const modifiedLines = new Set<number>();
+  const addedLines = new Set<number>();
+  const deletedAnchors: Array<{ line: number; count: number }> = [];
+
+  if (!diff) {
+    return { modifiedLines, addedLines, deletedAnchors };
+  }
+
+  for (const hunk of diff.hunks) {
+    let pendingDeletes = 0;
+    let pendingAdds = 0;
+    let pendingAnchor = hunk.new_start;
+
+    const flushPending = () => {
+      const overlap = Math.min(pendingDeletes, pendingAdds);
+      for (let offset = 0; offset < overlap; offset += 1) {
+        modifiedLines.add(pendingAnchor + offset);
+      }
+      for (let offset = overlap; offset < pendingAdds; offset += 1) {
+        addedLines.add(pendingAnchor + offset);
+      }
+      if (pendingDeletes > overlap) {
+        deletedAnchors.push({
+          line: pendingAnchor + overlap,
+          count: pendingDeletes - overlap,
+        });
+      }
+      pendingDeletes = 0;
+      pendingAdds = 0;
+    };
+
+    for (const line of hunk.lines) {
+      if (line.kind === "-") {
+        if (pendingDeletes === 0 && pendingAdds === 0) {
+          pendingAnchor = line.new_line ?? pendingAnchor;
+        }
+        pendingDeletes += 1;
+        continue;
+      }
+
+      if (line.kind === "+") {
+        if (pendingDeletes === 0 && pendingAdds === 0) {
+          pendingAnchor = line.new_line ?? pendingAnchor;
+        }
+        pendingAdds += 1;
+        continue;
+      }
+
+      flushPending();
+    }
+
+    flushPending();
+  }
+
+  return { modifiedLines, addedLines, deletedAnchors };
+}
+
 function App() {
   const isMac = useMemo(() => isMacPlatform(), []);
   const shortcutLabel = useCallback((key: string, options?: { shift?: boolean; alt?: boolean }) => {
@@ -198,6 +256,7 @@ function App() {
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
   const [selectedGitFilePath, setSelectedGitFilePath] = useState<string | null>(null);
   const [fileDiff, setFileDiff] = useState<FileDiff | null>(null);
+  const [activeEditorGitDiff, setActiveEditorGitDiff] = useState<FileDiff | null>(null);
   const [diffSourceTab, setDiffSourceTab] = useState<"diff" | "log">("diff");
   const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false);
   const [isGitRepo, setIsGitRepo] = useState(false);
@@ -260,16 +319,26 @@ function App() {
     [openTabs, activeTabPath]
   );
 
-  const lineChangeSet = useMemo(() => {
-    if (!activeTab || !activeTab.isDirty) {
-      return {
-        modifiedLines: new Set<number>(),
-        addedLines: new Set<number>(),
-        deletedAnchors: [] as Array<{ line: number; count: number }>,
-      };
-    }
+  const emptyLineChangeSet = useMemo(
+    () => ({
+      modifiedLines: new Set<number>(),
+      addedLines: new Set<number>(),
+      deletedAnchors: [] as Array<{ line: number; count: number }>,
+    }),
+    []
+  );
+
+  const localLineChangeSet = useMemo(() => {
+    if (!activeTab || !activeTab.isDirty) return emptyLineChangeSet;
     return computeLineChangeSet(activeTab.originalContent, activeTab.content);
-  }, [activeTab]);
+  }, [activeTab, emptyLineChangeSet]);
+
+  const gitLineChangeSet = useMemo(
+    () => computeLineChangeSetFromDiff(activeEditorGitDiff),
+    [activeEditorGitDiff]
+  );
+
+  const lineChangeSet = activeTab?.isDirty ? localLineChangeSet : gitLineChangeSet;
 
   const modifiedLineExtensions = useMemo(() => {
     if (
@@ -568,6 +637,30 @@ function App() {
     [openTabs, activeTabPath, updateRecentFiles, scrollToLine, addToNavHistory]
   );
 
+  const refreshGitWorkingTreeState = useCallback(async () => {
+    if (!projectRoot || !isGitRepo) return;
+    const [changes, staged] = await Promise.all([
+      getWorkingTreeChanges(projectRoot).catch(() => []),
+      getStagedFiles(projectRoot).catch(() => []),
+    ]);
+    setGitChanges(changes);
+    setStagedFiles(staged);
+  }, [projectRoot, isGitRepo]);
+
+  const refreshActiveEditorGitDiff = useCallback(async () => {
+    if (!projectRoot || !isGitRepo || !activeTabPath) {
+      setActiveEditorGitDiff(null);
+      return;
+    }
+    try {
+      const relativePath = toRelativePath(projectRoot, activeTabPath);
+      const diff = await getFileDiff(projectRoot, relativePath);
+      setActiveEditorGitDiff(diff);
+    } catch {
+      setActiveEditorGitDiff(null);
+    }
+  }, [projectRoot, isGitRepo, activeTabPath]);
+
   const handleSave = useCallback(async () => {
     const tab = openTabs.find((t) => t.path === activeTabPath);
     if (!tab || !tab.isDirty || tab.isLoading || tab.isSaving) return;
@@ -590,13 +683,15 @@ function App() {
             : t
         )
       );
+      void refreshGitWorkingTreeState();
+      void refreshActiveEditorGitDiff();
     } catch (e) {
       setError(String(e));
       setOpenTabs((prev) =>
         prev.map((t) => (t.path === activeTabPath ? { ...t, isSaving: false } : t))
       );
     }
-  }, [openTabs, activeTabPath]);
+  }, [openTabs, activeTabPath, refreshGitWorkingTreeState, refreshActiveEditorGitDiff]);
 
   const handleSaveAll = useCallback(async () => {
     const dirtyTabs = openTabs.filter((t) => t.isDirty && !t.isLoading && !t.isSaving);
@@ -644,7 +739,9 @@ function App() {
     if (errors.length > 0) {
       setError(`Save all failed for some files:\n${errors.join("\n")}`);
     }
-  }, [openTabs]);
+    void refreshGitWorkingTreeState();
+    void refreshActiveEditorGitDiff();
+  }, [openTabs, refreshGitWorkingTreeState, refreshActiveEditorGitDiff]);
 
   useEffect(() => {
     const dirtyTabs = openTabs.filter((t) => t.isDirty && !t.isLoading && !t.isSaving);
@@ -694,11 +791,13 @@ function App() {
         if (errors.length > 0) {
           setError(`Auto-save failed for some files:\n${errors.join("\n")}`);
         }
+        void refreshGitWorkingTreeState();
+        void refreshActiveEditorGitDiff();
       });
     }, 900);
 
     return () => window.clearTimeout(timeoutId);
-  }, [openTabs]);
+  }, [openTabs, refreshGitWorkingTreeState, refreshActiveEditorGitDiff]);
 
   const handleSwitchTab = useCallback((path: string) => {
     setActiveTabPath(path);
@@ -908,6 +1007,10 @@ function App() {
         .catch(() => setFileBlame(null));
     }
   }, [bottomPanelTab, projectRoot, isGitRepo, activeTab]);
+
+  useEffect(() => {
+    void refreshActiveEditorGitDiff();
+  }, [refreshActiveEditorGitDiff, gitChanges, stagedFiles]);
 
   // Git stage/unstage handlers
   const handleStageFile = useCallback(async (filePath: string) => {
@@ -1908,7 +2011,6 @@ function App() {
           <div className="breadcrumb">
             {activeTab?.path || (rootName ? "Select a file" : "—")}
             {activeTab?.isDirty ? " ●" : ""}
-            {activeTab?.isSaving ? " (saving...)" : ""}
             {activeTab?.isLoading ? " (loading...)" : ""}
           </div>
           <TabBar
