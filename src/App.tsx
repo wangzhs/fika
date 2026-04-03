@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { dracula } from "@uiw/codemirror-theme-dracula";
+import { EditorView, Decoration, gutter, GutterMarker } from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
@@ -19,6 +21,52 @@ import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
 import { collectFilePaths } from "./utils/tree";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+
+function computeModifiedLineNumbers(originalContent: string, currentContent: string) {
+  const originalLines = originalContent.split("\n");
+  const currentLines = currentContent.split("\n");
+
+  let prefixLength = 0;
+  const maxPrefix = Math.min(originalLines.length, currentLines.length);
+  while (
+    prefixLength < maxPrefix &&
+    originalLines[prefixLength] === currentLines[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let originalSuffix = originalLines.length - 1;
+  let currentSuffix = currentLines.length - 1;
+  while (
+    originalSuffix >= prefixLength &&
+    currentSuffix >= prefixLength &&
+    originalLines[originalSuffix] === currentLines[currentSuffix]
+  ) {
+    originalSuffix -= 1;
+    currentSuffix -= 1;
+  }
+
+  const modifiedLines = new Set<number>();
+  if (currentSuffix < prefixLength) {
+    return modifiedLines;
+  }
+
+  for (let lineNumber = prefixLength + 1; lineNumber <= currentSuffix + 1; lineNumber += 1) {
+    modifiedLines.add(lineNumber);
+  }
+
+  return modifiedLines;
+}
+
+class ModifiedLineMarker extends GutterMarker {
+  toDOM() {
+    const marker = document.createElement("span");
+    marker.className = "cm-modified-line-marker";
+    return marker;
+  }
+}
+
+const modifiedLineMarker = new ModifiedLineMarker();
 
 function langFromPath(path: string) {
   const p = path.toLowerCase();
@@ -170,6 +218,41 @@ function App() {
     [openTabs, activeTabPath]
   );
   const hasDirtyTabs = useMemo(() => openTabs.some((t) => t.isDirty), [openTabs]);
+
+  const modifiedLineNumbers = useMemo(() => {
+    if (!activeTab || !activeTab.isDirty) return new Set<number>();
+    return computeModifiedLineNumbers(activeTab.originalContent, activeTab.content);
+  }, [activeTab]);
+
+  const modifiedLineExtensions = useMemo(() => {
+    if (!activeTab || modifiedLineNumbers.size === 0) return [];
+
+    const lineDecorations = EditorView.decorations.compute([], (state) => {
+      const builder = new RangeSetBuilder<Decoration>();
+      for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+        if (!modifiedLineNumbers.has(lineNumber)) continue;
+        const line = state.doc.line(lineNumber);
+        builder.add(line.from, line.from, Decoration.line({ class: "cm-line-modified" }));
+      }
+      return builder.finish();
+    });
+
+    const modifiedLineGutter = gutter({
+      class: "cm-modified-gutter",
+      markers: (view) => {
+        const builder = new RangeSetBuilder<GutterMarker>();
+        for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
+          if (!modifiedLineNumbers.has(lineNumber)) continue;
+          const line = view.state.doc.line(lineNumber);
+          builder.add(line.from, line.from, modifiedLineMarker);
+        }
+        return builder.finish();
+      },
+      initialSpacer: () => modifiedLineMarker,
+    });
+
+    return [modifiedLineGutter, lineDecorations];
+  }, [activeTab, modifiedLineNumbers]);
 
   const gitStatusByPath = useMemo(() => {
     const statusMap: Record<string, string> = {};
@@ -363,6 +446,7 @@ function App() {
       const newTab: EditorDocument = {
         path,
         content: "",
+        originalContent: "",
         isDirty: false,
         isLoading: true,
       };
@@ -375,9 +459,9 @@ function App() {
         setOpenTabs((prev) =>
           prev.some((t) => t.path === path)
             ? prev.map((t) =>
-                t.path === path ? { ...t, content, isLoading: false } : t
+                t.path === path ? { ...t, content, originalContent: content, isLoading: false } : t
               )
-            : [...prev, { ...newTab, content, isLoading: false }]
+            : [...prev, { ...newTab, content, originalContent: content, isLoading: false }]
         );
         updateRecentFiles(path);
         addToNavHistory(path, lineNumber);
@@ -420,7 +504,7 @@ function App() {
       setOpenTabs((prev) =>
         prev.map((t) =>
           t.path === activeTabPath
-            ? { ...t, isDirty: false }
+            ? { ...t, originalContent: t.content, isDirty: false }
             : t
         )
       );
@@ -457,7 +541,7 @@ function App() {
         if (!success && error) {
           errors.push(`${t.path}: ${error}`);
         }
-        return { ...t, isDirty: success ? false : t.isDirty };
+        return { ...t, originalContent: success ? t.content : t.originalContent, isDirty: success ? false : t.isDirty };
       })
     );
 
@@ -947,7 +1031,7 @@ function App() {
     const currentWindow = getCurrentWindow();
 
     let unlisten: (() => void) | undefined;
-    currentWindow.onCloseRequested((event) => {
+    currentWindow.onCloseRequested(async (event) => {
       if (!hasDirtyTabs) return;
       const shouldClose = window.confirm("You have unsaved changes. Close anyway?");
       if (!shouldClose) {
@@ -1740,7 +1824,7 @@ function App() {
                 value={activeTab.content}
                 height="100%"
                 theme={dracula}
-                extensions={langFromPath(activeTab.path)}
+                extensions={[...langFromPath(activeTab.path), ...modifiedLineExtensions]}
                 editable={!activeTab.isLoading}
                 onChange={(value) =>
                   setOpenTabs((prev) =>
