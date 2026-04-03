@@ -1,11 +1,16 @@
 import type { FileNode, GitFileStatus } from "../types";
 
+function normalizeFilePath(path: string) {
+  return path.replace(/\\/g, "/");
+}
+
 interface FileTreeProps {
   node: FileNode;
   depth: number;
   openFolders: Set<string>;
   toggleFolder: (p: string) => void;
   selectedFile: string;
+  projectRoot?: string | null;
   gitStatusByPath?: Record<string, GitFileStatus>;
   onSelectFile: (path: string) => void;
   onContextMenu?: (path: string, isDir: boolean, e: React.MouseEvent) => void;
@@ -17,12 +22,19 @@ export function FileTree({
   openFolders,
   toggleFolder,
   selectedFile,
+  projectRoot,
   gitStatusByPath,
   onSelectFile,
   onContextMenu,
 }: FileTreeProps) {
   if (!node.is_dir) {
-    const gitStatus = gitStatusByPath?.[node.path] ?? null;
+    const normalizedPath = normalizeFilePath(node.path);
+    const normalizedRoot = normalizeFilePath(projectRoot ?? "").replace(/\/$/, "");
+    const relativePath =
+      normalizedRoot && normalizedPath.startsWith(`${normalizedRoot}/`)
+        ? normalizedPath.slice(normalizedRoot.length + 1)
+        : normalizedPath;
+    const gitStatus = gitStatusByPath?.[relativePath] ?? null;
     return (
       <li
         className={`tree-file ${selectedFile === node.path ? "active" : ""}`}
@@ -58,6 +70,7 @@ export function FileTree({
             openFolders={openFolders}
             toggleFolder={toggleFolder}
             selectedFile={selectedFile}
+            projectRoot={projectRoot}
             gitStatusByPath={gitStatusByPath}
             onSelectFile={onSelectFile}
             onContextMenu={onContextMenu}

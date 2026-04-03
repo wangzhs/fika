@@ -100,6 +100,20 @@ function toRelativePath(root: string | null, absolutePath: string) {
   return absolutePath;
 }
 
+function normalizeFilePath(path: string) {
+  return path.replace(/\\/g, "/");
+}
+
+function toProjectRelativePathValue(projectRoot: string | null, absolutePath: string) {
+  if (!projectRoot) return normalizeFilePath(absolutePath);
+  const normalizedRoot = normalizeFilePath(projectRoot).replace(/\/$/, "");
+  const normalizedPath = normalizeFilePath(absolutePath);
+  if (!normalizedPath.startsWith(`${normalizedRoot}/`) && normalizedPath !== normalizedRoot) {
+    return normalizedPath;
+  }
+  return normalizedPath.slice(normalizedRoot.length).replace(/^\/+/, "");
+}
+
 function isMacPlatform() {
   if (typeof navigator === "undefined") return false;
   return /Mac|iPhone|iPad/i.test(navigator.platform);
@@ -210,10 +224,7 @@ function App() {
   }, []);
 
   const toProjectRelativePath = useCallback((absolutePath: string) => {
-    if (!projectRoot) return absolutePath;
-    if (!absolutePath.startsWith(projectRoot)) return absolutePath;
-    const suffix = absolutePath.slice(projectRoot.length);
-    return suffix.replace(/^[/\\]/, "");
+    return toProjectRelativePathValue(projectRoot, absolutePath);
   }, [projectRoot]);
 
   const allFilePaths = useMemo(() => {
@@ -251,8 +262,22 @@ function App() {
     const modified = new Set<number>();
     const added = new Set<number>();
     const deleted = new Set<number>();
+    const currentRelativePath =
+      activeTab && projectRoot && activeTab.path.startsWith(projectRoot)
+        ? toProjectRelativePath(activeTab.path)
+        : null;
+    const currentGitStatus = currentRelativePath
+      ? stagedFiles.find((file) => file.path === currentRelativePath)?.status ??
+        gitChanges.find((file) => file.path === currentRelativePath)?.status ??
+        null
+      : null;
 
-    if (activeEditorGitDiff?.hunks.length) {
+    if (currentGitStatus === "?") {
+      const lineCount = activeTab?.content.split("\n").length ?? 0;
+      for (let lineNumber = 1; lineNumber <= lineCount; lineNumber += 1) {
+        added.add(lineNumber);
+      }
+    } else if (activeEditorGitDiff?.hunks.length) {
       for (const hunk of activeEditorGitDiff.hunks) {
         let pendingDeleted = 0;
         let deleteAnchor = hunk.new_start;
@@ -293,7 +318,7 @@ function App() {
     }
 
     return { modified, added, deleted };
-  }, [activeEditorGitDiff, activeTab]);
+  }, [activeEditorGitDiff, activeTab, gitChanges, projectRoot, stagedFiles, toProjectRelativePath]);
 
   const modifiedLineExtensions = useMemo(() => {
     if (
@@ -342,15 +367,14 @@ function App() {
 
   const gitStatusByPath = useMemo(() => {
     const statusMap: Record<string, string> = {};
-    if (!projectRoot) return statusMap;
     for (const file of gitChanges) {
-      statusMap[`${projectRoot}/${file.path}`] = file.status;
+      statusMap[normalizeFilePath(file.path)] = file.status;
     }
     for (const file of stagedFiles) {
-      statusMap[`${projectRoot}/${file.path}`] = file.status;
+      statusMap[normalizeFilePath(file.path)] = file.status;
     }
     return statusMap;
-  }, [gitChanges, stagedFiles, projectRoot]);
+  }, [gitChanges, stagedFiles]);
 
   // In-file search state - current match index tracking (-1 means no selection yet)
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
@@ -572,7 +596,7 @@ function App() {
   );
 
   const refreshGitWorkingTreeState = useCallback(async () => {
-    if (!projectRoot || !isGitRepo) return;
+    if (!projectRoot) return;
     const [changes, staged] = await Promise.all([
       getWorkingTreeChanges(projectRoot).catch(() => []),
       getStagedFiles(projectRoot).catch(() => []),
@@ -587,7 +611,7 @@ function App() {
       if (current && availablePaths.has(current)) return current;
       return staged[0]?.path ?? changes[0]?.path ?? null;
     });
-  }, [projectRoot, isGitRepo]);
+  }, [projectRoot]);
 
   const handleSave = useCallback(async () => {
     const tab = openTabs.find((t) => t.path === activeTabPath);
@@ -768,6 +792,17 @@ function App() {
       setStagedFiles([]);
     }
 
+    const stagedFilesValue = stagedResult.status === 'fulfilled' ? stagedResult.value : [];
+    const changedFilesValue = changesResult.status === 'fulfilled' ? changesResult.value : [];
+    const availablePaths = new Set([
+      ...stagedFilesValue.map((file) => file.path),
+      ...changedFilesValue.map((file) => file.path),
+    ]);
+    setSelectedGitFilePath((current) => {
+      if (current && availablePaths.has(current)) return current;
+      return stagedFilesValue[0]?.path ?? changedFilesValue[0]?.path ?? null;
+    });
+
     setIsGitRepo(isRepo);
   }, [projectRoot]);
 
@@ -884,13 +919,18 @@ function App() {
       return;
     }
 
-    const currentStatus = gitStatusByPath[activeTab.path];
+    const relativePath = toProjectRelativePath(activeTab.path);
+    const currentStatus = gitStatusByPath[relativePath];
     if (!currentStatus) {
       setActiveEditorGitDiff(null);
       return;
     }
 
-    const relativePath = toProjectRelativePath(activeTab.path);
+    if (currentStatus === "?") {
+      setActiveEditorGitDiff(null);
+      return;
+    }
+
     const isStagedOnly =
       stagedFiles.some((file) => file.path === relativePath) &&
       !gitChanges.some((file) => file.path === relativePath);
@@ -1884,6 +1924,7 @@ function App() {
                   openFolders={openFolders}
                   toggleFolder={toggleFolder}
                   selectedFile={activeTabPath}
+                  projectRoot={projectRoot}
                   gitStatusByPath={gitStatusByPath}
                   onSelectFile={handleOpenFile}
                   onContextMenu={(path, isDir, e) => {
