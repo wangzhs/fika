@@ -144,7 +144,7 @@ function App() {
 
   // Bottom panel tab state
   const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("diff");
-  const [isBottomPanelOpen, setIsBottomPanelOpen] = useState(true);
+  const [isBottomPanelOpen, setIsBottomPanelOpen] = useState(false);
 
   // Git state
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
@@ -217,7 +217,21 @@ function App() {
     () => openTabs.find((t) => t.path === activeTabPath) || null,
     [openTabs, activeTabPath]
   );
-  const hasDirtyTabs = useMemo(() => openTabs.some((t) => t.isDirty), [openTabs]);
+  const getEditorContent = useCallback(
+    () => editorRef.current?.view?.state.doc.toString() ?? null,
+    []
+  );
+  const hasUnsavedChangesForPath = useCallback((path: string) => {
+    const tab = openTabs.find((t) => t.path === path);
+    if (!tab) return false;
+    const currentContent =
+      path === activeTabPath ? (getEditorContent() ?? tab.content) : tab.content;
+    return currentContent !== tab.originalContent;
+  }, [activeTabPath, getEditorContent, openTabs]);
+  const hasAnyUnsavedTabs = useMemo(
+    () => openTabs.some((tab) => hasUnsavedChangesForPath(tab.path)),
+    [openTabs, hasUnsavedChangesForPath]
+  );
 
   const modifiedLineNumbers = useMemo(() => {
     if (!activeTab || !activeTab.isDirty) return new Set<number>();
@@ -560,7 +574,7 @@ function App() {
     (path: string) => {
       const tab = openTabs.find((t) => t.path === path);
       if (!tab) return;
-      if (tab.isDirty) {
+      if (hasUnsavedChangesForPath(path)) {
         const ok = confirm("Unsaved changes will be lost. Close tab?");
         if (!ok) return;
       }
@@ -578,7 +592,7 @@ function App() {
         }
       }
     },
-    [openTabs, activeTabPath]
+    [openTabs, activeTabPath, hasUnsavedChangesForPath]
   );
 
   const toggleFolder = useCallback((path: string) => {
@@ -1016,7 +1030,7 @@ function App() {
   }, [globalSearchQuery]);
 
   useEffect(() => {
-    if (!hasDirtyTabs) return;
+    if (!hasAnyUnsavedTabs) return;
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
@@ -1025,11 +1039,11 @@ function App() {
 
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [hasDirtyTabs]);
+  }, [hasAnyUnsavedTabs]);
 
   useEffect(() => {
-    setUnsavedChangesFlag(hasDirtyTabs).catch(() => {});
-  }, [hasDirtyTabs]);
+    setUnsavedChangesFlag(hasAnyUnsavedTabs).catch(() => {});
+  }, [hasAnyUnsavedTabs]);
 
   // Save session state when relevant state changes (debounced)
   useEffect(() => {
@@ -1197,7 +1211,7 @@ function App() {
 
       if (isQuitApp) {
         e.preventDefault();
-        if (hasDirtyTabs) {
+        if (hasAnyUnsavedTabs) {
           const shouldClose = window.confirm("You have unsaved changes. Close anyway?");
           if (!shouldClose) return;
         }
@@ -1292,7 +1306,7 @@ function App() {
     handleOpenFolder,
     handleSave,
     handleSaveAll,
-    hasDirtyTabs,
+    hasAnyUnsavedTabs,
     handleCloseTab,
     handleOpenFile,
     goToNextMatch,
