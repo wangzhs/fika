@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { dracula } from "@uiw/codemirror-theme-dracula";
-import { EditorView, Decoration, gutter, GutterMarker } from "@codemirror/view";
+import { EditorView, Decoration, gutter, GutterMarker, keymap } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
@@ -593,6 +593,23 @@ function App() {
       }
     },
     [openTabs, activeTabPath, hasUnsavedChangesForPath]
+  );
+
+  const editorKeybindings = useMemo(
+    () =>
+      keymap.of([
+        {
+          key: "Mod-w",
+          preventDefault: true,
+          run: () => {
+            if (activeTabPath) {
+              handleCloseTab(activeTabPath);
+            }
+            return true;
+          },
+        },
+      ]),
+    [activeTabPath, handleCloseTab]
   );
 
   const toggleFolder = useCallback((path: string) => {
@@ -1836,7 +1853,7 @@ function App() {
                 value={activeTab.content}
                 height="100%"
                 theme={dracula}
-                extensions={[...langFromPath(activeTab.path), ...modifiedLineExtensions]}
+                extensions={[editorKeybindings, ...langFromPath(activeTab.path), ...modifiedLineExtensions]}
                 editable={!activeTab.isLoading}
                 onChange={(value) =>
                   setOpenTabs((prev) =>
