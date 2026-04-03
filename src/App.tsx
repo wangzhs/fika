@@ -1429,64 +1429,72 @@ function App() {
       )}
 
       <header className="titlebar">
-        <span className="logo">Fika</span>
-        <span className="project-name">
-          {rootName || "No folder opened"}
-        </span>
-        {isGitRepo && currentBranch && (
-          <button
-            className="branch-badge"
-            onClick={() => setBranchSwitcherOpen(true)}
-            title="Switch branch"
-          >
-            <span className="branch-icon">⎇</span>
-            <span className="branch-name">{currentBranch}</span>
-          </button>
-        )}
+        <div className="titlebar-leading">
+          <span className="logo">Fika</span>
+          <div className="titlebar-meta">
+            <span className="project-name">
+              {rootName || "No folder opened"}
+            </span>
+            {isGitRepo && currentBranch && (
+              <button
+                className="branch-badge"
+                onClick={() => setBranchSwitcherOpen(true)}
+                title="Switch branch"
+              >
+                <span className="branch-icon">⎇</span>
+                <span className="branch-name">{currentBranch}</span>
+              </button>
+            )}
+          </div>
+        </div>
         <div className="spacer" />
-        {/* Navigation buttons */}
-        <button
-          className="icon-btn"
-          title={`Back (${shortcutLabel(isMac ? "←" : "Left")})`}
-          onClick={goBack}
-          disabled={navIndex <= 0}
-        >
-          ←
-        </button>
-        <button
-          className="icon-btn"
-          title={`Forward (${shortcutLabel(isMac ? "→" : "Right")})`}
-          onClick={goForward}
-          disabled={navIndex >= navHistory.length - 1}
-        >
-          →
-        </button>
-        {/* Recent Projects button */}
-        <button
-          className="icon-btn"
-          title={`Recent Projects (${shortcutLabel("O", { shift: true })})`}
-          onClick={() => setRecentProjectsOpen(true)}
-        >
-          Recent
-        </button>
-        <button
-          className="icon-btn"
-          title={`Open Folder (${shortcutLabel("O")})`}
-          onClick={handleOpenFolder}
-        >
-          Open
-        </button>
-        <button
-          className="icon-btn"
-          title={`Find File (${shortcutLabel("N", { shift: true })})`}
-          onClick={() => {
-            if (!tree) return;
-            setFinderOpen(true);
-            setTimeout(() => inputRef.current?.focus(), 0);
-          }}
-        >
-          Files
-        </button>
+        <div className="titlebar-actions">
+          <div className="toolbar-group">
+            <button
+              className="icon-btn toolbar-btn"
+              title={`Back (${shortcutLabel(isMac ? "←" : "Left")})`}
+              onClick={goBack}
+              disabled={navIndex <= 0}
+            >
+              <span className="toolbar-btn-icon">←</span>
+            </button>
+            <button
+              className="icon-btn toolbar-btn"
+              title={`Forward (${shortcutLabel(isMac ? "→" : "Right")})`}
+              onClick={goForward}
+              disabled={navIndex >= navHistory.length - 1}
+            >
+              <span className="toolbar-btn-icon">→</span>
+            </button>
+          </div>
+          <div className="toolbar-group">
+            <button
+              className="icon-btn toolbar-btn toolbar-btn-text"
+              title={`Recent Projects (${shortcutLabel("O", { shift: true })})`}
+              onClick={() => setRecentProjectsOpen(true)}
+            >
+              <span className="toolbar-btn-label">Recent</span>
+            </button>
+            <button
+              className="icon-btn toolbar-btn toolbar-btn-text"
+              title={`Open Folder (${shortcutLabel("O")})`}
+              onClick={handleOpenFolder}
+            >
+              <span className="toolbar-btn-label">Open</span>
+            </button>
+            <button
+              className="icon-btn toolbar-btn toolbar-btn-text"
+              title={`Find File (${shortcutLabel("N", { shift: true })})`}
+              onClick={() => {
+                if (!tree) return;
+                setFinderOpen(true);
+                setTimeout(() => inputRef.current?.focus(), 0);
+              }}
+            >
+              <span className="toolbar-btn-label">Files</span>
+            </button>
+          </div>
+        </div>
       </header>
 
       <div className="main">
@@ -1597,6 +1605,7 @@ function App() {
             activeTabPath={activeTabPath}
             onSwitchTab={handleSwitchTab}
             onCloseTab={handleCloseTab}
+            closeTabTitle={`Close tab (${shortcutLabel("W")})`}
           />
           {error && (
             <div
