@@ -35,7 +35,8 @@ body, html, #root {
 
 .titlebar .logo,
 .titlebar .icon-btn,
-.titlebar .branch-badge {
+.titlebar .branch-badge,
+.titlebar .titlebar-action {
   -webkit-app-region: no-drag;
 }
 
@@ -71,6 +72,38 @@ body, html, #root {
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+.titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.titlebar-action {
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.04);
+  color: #c8cdd5;
+  border-radius: 8px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.titlebar-action:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.titlebar-action-icon {
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.82;
 }
 
 .icon-btn {

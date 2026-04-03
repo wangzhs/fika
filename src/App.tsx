@@ -569,12 +569,24 @@ function App() {
     if (!projectRoot) return;
     try {
       const diff = await getFileDiff(projectRoot, filePath);
+      setBottomPanelTab("diff");
       setSelectedDiffFile(filePath);
       setFileDiff(diff);
     } catch (e) {
       setError(String(e));
     }
   }, [projectRoot]);
+
+  const handleOpenGitHistory = useCallback(() => {
+    setBottomPanelTab("log");
+    setSelectedCommit(null);
+    setCommitFiles(null);
+  }, []);
+
+  const handleCompareActiveFile = useCallback(() => {
+    if (!activeTab || !isGitRepo) return;
+    void handleShowFileDiff(activeTab.path);
+  }, [activeTab, isGitRepo, handleShowFileDiff]);
 
   // Refresh git data when project changes or when switching to git tabs
   useEffect(() => {
@@ -897,6 +909,14 @@ function App() {
         (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "arrowleft";
       const isForward =
         (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "arrowright";
+      const isCompareFile =
+        (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "d";
+      const target = e.target as HTMLElement | null;
+      const isTypingTarget = !!target && (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      );
 
       // Handle Global Search modal keyboard navigation
       if (globalSearchOpen) {
@@ -1069,6 +1089,13 @@ function App() {
         goForward();
         return;
       }
+
+      if (isCompareFile && !isTypingTarget) {
+        if (!activeTab || !isGitRepo) return;
+        e.preventDefault();
+        handleCompareActiveFile();
+        return;
+      }
     }
 
     window.addEventListener("keydown", onKeyDown);
@@ -1098,6 +1125,9 @@ function App() {
     goToPrevMatch,
     goBack,
     goForward,
+    activeTab,
+    isGitRepo,
+    handleCompareActiveFile,
   ]);
 
   return (
@@ -1452,6 +1482,28 @@ function App() {
           </div>
         </div>
         <div className="spacer" />
+        {isGitRepo && (
+          <div className="titlebar-actions">
+            <button
+              className="titlebar-action"
+              onClick={handleOpenGitHistory}
+              title="Open Git history"
+            >
+              <span className="titlebar-action-icon">◷</span>
+              <span>History</span>
+            </button>
+            {activeTab && (
+              <button
+                className="titlebar-action"
+                onClick={handleCompareActiveFile}
+                title={`Compare current file (${shortcutLabel("D")})`}
+              >
+                <span className="titlebar-action-icon">≠</span>
+                <span>Compare</span>
+              </button>
+            )}
+          </div>
+        )}
       </header>
 
       <div className="main">
