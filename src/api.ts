@@ -117,3 +117,7 @@ export function saveSession(state: SessionState) {
 export function loadSession() {
   return invoke<SessionState>("load_session");
 }
+
+export function getOpenTarget(path: string) {
+  return invoke<{ kind: "file" | "directory"; root: string; file_path: string | null }>("get_open_target", { path });
+}

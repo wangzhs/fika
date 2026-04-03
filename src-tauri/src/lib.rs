@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
-    Manager, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, WindowEvent,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
@@ -13,6 +13,11 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 struct CloseGuard {
     has_unsaved_changes: AtomicBool,
     allow_next_close: AtomicBool,
+}
+
+#[derive(Default)]
+struct AppLifecycle {
+    is_quitting: AtomicBool,
 }
 
 #[derive(Serialize, Clone)]
@@ -123,6 +128,13 @@ pub struct SessionState {
     pub open_tabs: Vec<String>,
     pub active_tab_path: String,
     pub open_folders: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct OpenTarget {
+    kind: String,
+    root: String,
+    file_path: Option<String>,
 }
 
 const MENU_OPEN_FOLDER: &str = "file_open_folder";
@@ -1119,6 +1131,36 @@ async fn load_session(app_handle: tauri::AppHandle) -> Result<SessionState, Stri
     Ok(valid_state)
 }
 
+#[tauri::command]
+async fn get_open_target(path: String) -> Result<OpenTarget, String> {
+    let target = Path::new(&path);
+    if !target.exists() {
+      return Err(format!("Path does not exist: {}", path));
+    }
+
+    let canonical = target
+      .canonicalize()
+      .map_err(|e| format!("Failed to resolve path '{}': {}", path, e))?;
+
+    if canonical.is_dir() {
+      return Ok(OpenTarget {
+        kind: "directory".to_string(),
+        root: canonical.to_string_lossy().to_string(),
+        file_path: None,
+      });
+    }
+
+    let parent = canonical
+      .parent()
+      .ok_or_else(|| format!("File has no parent directory: {}", canonical.display()))?;
+
+    Ok(OpenTarget {
+      kind: "file".to_string(),
+      root: parent.to_string_lossy().to_string(),
+      file_path: Some(canonical.to_string_lossy().to_string()),
+    })
+}
+
 fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let pkg_info = app.package_info();
     let config = app.config();
@@ -1225,10 +1267,28 @@ fn eval_in_focused_window(app: &tauri::AppHandle, script: &str) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn show_and_focus_primary_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    let target = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.label() == "main")
+        .or_else(|| app.webview_windows().into_values().next());
+
+    if let Some(window) = target {
+        let _ = window.show();
+        let _ = window.set_focus();
+        Some(window)
+    } else {
+        None
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(CloseGuard::default())
+        .manage(AppLifecycle::default())
         .menu(|app| build_app_menu(app))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1245,6 +1305,16 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                let lifecycle = window.state::<AppLifecycle>();
+                if !lifecycle.is_quitting.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    if let Some(webview_window) = window.app_handle().get_webview_window(window.label()) {
+                        let _ = webview_window.eval("window.__FIKA_CLEAR_PROJECT__?.()");
+                    }
+                    let _ = window.hide();
+                    return;
+                }
+
                 let guard = window.state::<CloseGuard>();
                 if guard.allow_next_close.swap(false, Ordering::SeqCst) {
                     return;
@@ -1287,8 +1357,67 @@ pub fn run() {
             get_git_history, get_working_tree_changes, get_file_diff, get_commit_files,
             get_file_blame, stage_file, unstage_file, discard_file_changes, commit, get_staged_files,
             create_file, create_directory, rename_path, delete_path, refresh_tree,
-            save_recent_projects, load_recent_projects, save_session, load_session
+            save_recent_projects, load_recent_projects, save_session, load_session, get_open_target
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| match event {
+        RunEvent::ExitRequested { api, .. } => {
+            let guard = app_handle.state::<CloseGuard>();
+            let lifecycle = app_handle.state::<AppLifecycle>();
+
+            if !guard.has_unsaved_changes.load(Ordering::SeqCst) {
+                lifecycle.is_quitting.store(true, Ordering::SeqCst);
+                return;
+            }
+
+            api.prevent_exit();
+            let app = app_handle.clone();
+            std::thread::spawn(move || {
+                let should_quit = app
+                    .dialog()
+                    .message("You have unsaved changes. Quit anyway?")
+                    .title("Unsaved Changes")
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Quit".to_string(),
+                        "Cancel".to_string(),
+                    ))
+                    .blocking_show();
+
+                if !should_quit {
+                    return;
+                }
+
+                let lifecycle = app.state::<AppLifecycle>();
+                lifecycle.is_quitting.store(true, Ordering::SeqCst);
+                app.exit(0);
+            });
+        }
+        #[cfg(target_os = "macos")]
+        RunEvent::Opened { urls } => {
+            let paths: Vec<String> = urls
+                .into_iter()
+                .filter_map(|url| url.to_file_path().ok())
+                .map(|path| path.to_string_lossy().to_string())
+                .collect();
+
+            if paths.is_empty() {
+                return;
+            }
+
+            if let Some(window) = show_and_focus_primary_window(app_handle) {
+                let _ = window.emit("fika://open-system-paths", paths);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen {
+            has_visible_windows, ..
+        } => {
+            if !has_visible_windows {
+                let _ = show_and_focus_primary_window(app_handle);
+            }
+        }
+        _ => {}
+    });
 }

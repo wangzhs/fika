@@ -15,7 +15,7 @@ import {
   getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles,
   getFileBlame, stageFile, unstageFile, discardFileChanges, commit, getStagedFiles,
   createFile, createDirectory, renamePath, deletePath, refreshTree,
-  saveRecentProjects, loadRecentProjects, saveSession, loadSession, setUnsavedChangesFlag
+  saveRecentProjects, loadRecentProjects, saveSession, loadSession, setUnsavedChangesFlag, getOpenTarget
 } from "./api";
 import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
@@ -127,6 +127,7 @@ declare global {
     __FIKA_OPEN_FOLDER__?: () => void;
     __FIKA_SHOW_RECENT_PROJECTS__?: () => void;
     __FIKA_OPEN_FOLDER_NEW_WINDOW__?: () => void;
+    __FIKA_CLEAR_PROJECT__?: () => void;
     __FIKA_SESSION_RESTORED__?: boolean;
   }
 }
@@ -565,6 +566,53 @@ function App() {
     });
   }, []);
 
+  const clearCurrentProject = useCallback(async () => {
+    pendingOpenPathsRef.current.clear();
+    setProjectRoot(null);
+    setRootName(null);
+    setTree(null);
+    setOpenFolders(new Set());
+    setOpenTabs([]);
+    setActiveTabPath("");
+    setSelectedTreePath("");
+    setRecentFilePaths([]);
+    setNavHistory([]);
+    setNavIndex(-1);
+    setBottomPanelTab("diff");
+    setIsBottomPanelOpen(false);
+    setCurrentBranch(null);
+    setBranches([]);
+    setGitHistory([]);
+    setGitHistoryFilePath(null);
+    setGitChanges([]);
+    setSelectedCommit(null);
+    setCommitFiles(null);
+    setSelectedDiffFile(null);
+    setSelectedGitFilePath(null);
+    setFileDiff(null);
+    setActiveEditorGitDiff(null);
+    setDiffSourceTab("diff");
+    setBranchSwitcherOpen(false);
+    setIsGitRepo(false);
+    setFileBlame(null);
+    setSelectedBlameCommitHash(null);
+    setStagedFiles([]);
+    setCommitMessage("");
+    setIsCommitting(false);
+    setContextMenu(null);
+    setRenameModal(null);
+    setNewFileModal(null);
+    setDiscardFileModalPath(null);
+    setError(null);
+    saveSession({
+      project_root: null,
+      open_tabs: [],
+      active_tab_path: "",
+      open_folders: [],
+    }).catch(() => {});
+    setUnsavedChangesFlag(false).catch(() => {});
+  }, []);
+
   // Navigation history handlers
   const addToNavHistory = useCallback((path: string, line?: number) => {
     if (isNavigatingRef.current) {
@@ -651,6 +699,21 @@ function App() {
     },
     [openTabs, activeTabPath, updateRecentFiles, scrollToLine, addToNavHistory]
   );
+
+  const handleOpenSystemPath = useCallback(async (path: string) => {
+    try {
+      const target = await getOpenTarget(path);
+      if (target.kind === "file" && target.file_path) {
+        await handleOpenFolderWithSession(target.root);
+        await handleOpenFile(target.file_path, undefined, "system-open");
+        return;
+      }
+
+      await handleOpenFolderWithSession(target.root);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [handleOpenFile, handleOpenFolderWithSession]);
 
   const refreshGitWorkingTreeState = useCallback(async () => {
     if (!projectRoot) return;
@@ -803,13 +866,20 @@ function App() {
     window.__FIKA_OPEN_FOLDER_NEW_WINDOW__ = () => {
       void createProjectWindow();
     };
+    window.__FIKA_CLEAR_PROJECT__ = () => {
+      void (async () => {
+        await handleSaveAll();
+        await clearCurrentProject();
+      })();
+    };
 
     return () => {
       delete window.__FIKA_OPEN_FOLDER__;
       delete window.__FIKA_SHOW_RECENT_PROJECTS__;
       delete window.__FIKA_OPEN_FOLDER_NEW_WINDOW__;
+      delete window.__FIKA_CLEAR_PROJECT__;
     };
-  }, [createProjectWindow, handleOpenFolder]);
+  }, [clearCurrentProject, createProjectWindow, handleOpenFolder, handleSaveAll]);
 
   const editorKeybindings = useMemo(
     () =>
@@ -1402,6 +1472,7 @@ function App() {
 
   useEffect(() => {
     let unlistenOpenProject: (() => void) | undefined;
+    let unlistenSystemOpen: (() => void) | undefined;
 
     getCurrentWindow().listen<string>("fika://open-project-path", async (event) => {
       await handleOpenFolderWithSession(event.payload);
@@ -1409,10 +1480,36 @@ function App() {
       unlistenOpenProject = unlisten;
     });
 
+    getCurrentWindow().listen<string[]>("fika://open-system-paths", async (event) => {
+      for (const path of event.payload) {
+        await handleOpenSystemPath(path);
+      }
+    }).then((unlisten) => {
+      unlistenSystemOpen = unlisten;
+    });
+
     return () => {
       unlistenOpenProject?.();
+      unlistenSystemOpen?.();
     };
-  }, [handleOpenFolderWithSession]);
+  }, [handleOpenFolderWithSession, handleOpenSystemPath]);
+
+  useEffect(() => {
+    let unlistenDragDrop: (() => void) | undefined;
+
+    getCurrentWindow().onDragDropEvent(async (event) => {
+      if (event.payload.type !== "drop") return;
+      for (const path of event.payload.paths) {
+        await handleOpenSystemPath(path);
+      }
+    }).then((unlisten) => {
+      unlistenDragDrop = unlisten;
+    });
+
+    return () => {
+      unlistenDragDrop?.();
+    };
+  }, [handleOpenSystemPath]);
 
   useEffect(() => {
     setSelectedIndex(0);
