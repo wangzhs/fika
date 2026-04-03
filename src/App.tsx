@@ -1595,6 +1595,15 @@ function App() {
                   foldGutter: false,
                 }}
               />
+            ) : projectRoot && tree ? (
+              <div className="code-placeholder">
+                <div className="empty-state-card">
+                  <div className="empty-state-title">No file selected</div>
+                  <div className="empty-state-subtitle">
+                    Choose a file from the project tree or use <kbd>{shortcutLabel("N", { shift: true })}</kbd> to find one quickly.
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="code-placeholder">
                 <div className="welcome-card">
