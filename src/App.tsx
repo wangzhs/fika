@@ -18,6 +18,7 @@ import {
 import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
 import { collectFilePaths } from "./utils/tree";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 function langFromPath(path: string) {
   const p = path.toLowerCase();
@@ -168,6 +169,7 @@ function App() {
     () => openTabs.find((t) => t.path === activeTabPath) || null,
     [openTabs, activeTabPath]
   );
+  const hasDirtyTabs = useMemo(() => openTabs.some((t) => t.isDirty), [openTabs]);
 
   const gitStatusByPath = useMemo(() => {
     const statusMap: Record<string, string> = {};
@@ -929,6 +931,37 @@ function App() {
     setGlobalSelectedIndex(0);
   }, [globalSearchQuery]);
 
+  useEffect(() => {
+    if (!hasDirtyTabs) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasDirtyTabs]);
+
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+
+    let unlisten: (() => void) | undefined;
+    currentWindow.onCloseRequested((event) => {
+      if (!hasDirtyTabs) return;
+      const shouldClose = window.confirm("You have unsaved changes. Close anyway?");
+      if (!shouldClose) {
+        event.preventDefault();
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    }).catch(() => {});
+
+    return () => {
+      unlisten?.();
+    };
+  }, [hasDirtyTabs]);
+
   // Save session state when relevant state changes (debounced)
   useEffect(() => {
     if (!projectRoot) return;
@@ -1671,8 +1704,12 @@ function App() {
 
         <section className="editor">
           <div className="breadcrumb">
-            {activeTab?.path || (rootName ? "Select a file" : "—")}
-            {activeTab?.isDirty ? " ●" : ""}
+            <span className="breadcrumb-path">
+              {activeTab?.path || (rootName ? "Select a file" : "—")}
+            </span>
+            {activeTab?.isDirty && (
+              <span className="editor-status-badge dirty">Unsaved</span>
+            )}
             {activeTab?.isLoading ? " (loading...)" : ""}
           </div>
           <TabBar

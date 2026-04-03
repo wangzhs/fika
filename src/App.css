@@ -262,9 +262,35 @@ body, html, #root {
   border-bottom: 1px solid #181a1d;
   display: flex;
   align-items: center;
+  gap: 10px;
   padding: 0 16px;
   font-size: 12px;
   color: #9ca3af;
+}
+
+.breadcrumb-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-status-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.editor-status-badge.dirty {
+  color: #ffd6a8;
+  background: rgba(204, 118, 0, 0.18);
+  border: 1px solid rgba(204, 118, 0, 0.34);
 }
 
 .code-editor {
