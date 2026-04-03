@@ -7,6 +7,8 @@ import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { css } from "@codemirror/lang-css";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./App.css";
 import type { Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab, FileBlame, StagedFile, RecentProject, NavigationEntry } from "./types";
 import {
@@ -134,6 +136,7 @@ declare global {
 
 function App() {
   const isMac = useMemo(() => isMacPlatform(), []);
+  const [markdownPreviewOpen, setMarkdownPreviewOpen] = useState(false);
   const shortcutLabel = useCallback((key: string, options?: { shift?: boolean; alt?: boolean }) => {
     if (isMac) {
       return `${options?.shift ? "⇧" : ""}${options?.alt ? "⌥" : ""}⌘${key}`;
@@ -258,6 +261,10 @@ function App() {
   const activeTab = useMemo(
     () => openTabs.find((t) => t.path === activeTabPath) || null,
     [openTabs, activeTabPath]
+  );
+  const isMarkdownTab = useMemo(
+    () => !!activeTab?.path && /\.(md|markdown)$/i.test(activeTab.path),
+    [activeTab]
   );
   const getEditorContent = useCallback(
     () => editorRef.current?.view?.state.doc.toString() ?? null,
@@ -414,6 +421,10 @@ function App() {
   useEffect(() => {
     setCurrentMatchIndex(-1);
   }, [inFileQuery, activeTabPath]);
+
+  useEffect(() => {
+    setMarkdownPreviewOpen(false);
+  }, [activeTabPath]);
 
   const updateRecentFiles = useCallback((path: string) => {
     if (!projectRoot || !path.startsWith(projectRoot)) return;
@@ -885,6 +896,15 @@ function App() {
     () =>
       keymap.of([
         {
+          key: "Mod-Shift-p",
+          preventDefault: true,
+          run: () => {
+            if (!isMarkdownTab) return false;
+            setMarkdownPreviewOpen((prev) => !prev);
+            return true;
+          },
+        },
+        {
           key: "Mod-w",
           preventDefault: true,
           run: () => {
@@ -895,8 +915,23 @@ function App() {
           },
         },
       ]),
-    [activeTabPath, handleCloseTab]
+    [activeTabPath, handleCloseTab, isMarkdownTab]
   );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isMarkdownTab) return;
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        setMarkdownPreviewOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [isMarkdownTab]);
 
   const toggleFolder = useCallback((path: string) => {
     setOpenFolders((prev) => {
@@ -2339,6 +2374,24 @@ function App() {
               <span className="editor-status-badge dirty">Unsaved</span>
             )}
             {activeTab?.isLoading ? " (loading...)" : ""}
+            {isMarkdownTab && !activeTab?.isLoading && (
+              <div className="editor-mode-toggle">
+                <button
+                  type="button"
+                  className={`editor-mode-button ${!markdownPreviewOpen ? "active" : ""}`}
+                  onClick={() => setMarkdownPreviewOpen(false)}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className={`editor-mode-button ${markdownPreviewOpen ? "active" : ""}`}
+                  onClick={() => setMarkdownPreviewOpen(true)}
+                >
+                  Preview
+                </button>
+              </div>
+            )}
           </div>
           <TabBar
             tabs={openTabs}
@@ -2371,30 +2424,83 @@ function App() {
                   </div>
                 </div>
               ) : (
-              <CodeMirror
-                key={activeTab.path}
-                ref={editorRef}
-                value={activeTab.content}
-                height="100%"
-                theme={dracula}
-                extensions={[editorKeybindings, ...langFromPath(activeTab.path), ...modifiedLineExtensions]}
-                editable
-                onChange={(value) =>
-                  setOpenTabs((prev) =>
-                    prev.map((t) =>
-                      t.path === activeTabPath
-                        ? { ...t, content: value, isDirty: true }
-                        : t
+              markdownPreviewOpen && isMarkdownTab ? (
+                <div className="markdown-preview">
+                  <div className="markdown-preview-inner">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        h1: ({ children }) => <h1 className="md-heading md-heading-1">{children}</h1>,
+                        h2: ({ children }) => <h2 className="md-heading md-heading-2">{children}</h2>,
+                        h3: ({ children }) => <h3 className="md-heading md-heading-3">{children}</h3>,
+                        h4: ({ children }) => <h4 className="md-heading md-heading-4">{children}</h4>,
+                        h5: ({ children }) => <h5 className="md-heading md-heading-5">{children}</h5>,
+                        h6: ({ children }) => <h6 className="md-heading md-heading-6">{children}</h6>,
+                        p: ({ children }) => <p className="md-paragraph">{children}</p>,
+                        ul: ({ children }) => <ul className="md-list">{children}</ul>,
+                        ol: ({ children }) => <ol className="md-list">{children}</ol>,
+                        blockquote: ({ children }) => <blockquote className="md-quote">{children}</blockquote>,
+                        a: ({ children, href }) => (
+                          <a className="md-link" href={href} target="_blank" rel="noreferrer">
+                            {children}
+                          </a>
+                        ),
+                        code: ({ children, className }) => {
+                          const language = className?.replace(/^language-/, "") ?? "";
+                          const text = String(children).replace(/\n$/, "");
+                          if (!className) {
+                            return <code className="md-inline-code">{text}</code>;
+                          }
+                          return (
+                            <div className="md-code-block">
+                              {language ? <div className="md-code-language">{language}</div> : null}
+                              <pre><code>{text}</code></pre>
+                            </div>
+                          );
+                        },
+                        img: ({ src, alt }) => <img className="md-image" src={src ?? ""} alt={alt ?? ""} />,
+                        table: ({ children }) => <div className="md-table-wrap"><table className="md-table">{children}</table></div>,
+                        th: ({ children }) => <th className="md-table-head">{children}</th>,
+                        td: ({ children }) => <td className="md-table-cell">{children}</td>,
+                        hr: () => <hr className="md-divider" />,
+                        input: ({ checked, type, disabled }) =>
+                          type === "checkbox" ? (
+                            <input className="md-task-checkbox" type="checkbox" checked={checked} disabled={disabled ?? true} readOnly />
+                          ) : (
+                            <input type={type} checked={checked} disabled={disabled} readOnly />
+                          ),
+                      }}
+                    >
+                      {activeTab.content}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              ) : (
+                <CodeMirror
+                  key={activeTab.path}
+                  ref={editorRef}
+                  value={activeTab.content}
+                  height="100%"
+                  theme={dracula}
+                  extensions={[editorKeybindings, ...langFromPath(activeTab.path), ...modifiedLineExtensions]}
+                  editable
+                  onChange={(value) =>
+                    setOpenTabs((prev) =>
+                      prev.map((t) =>
+                        t.path === activeTabPath
+                          ? { ...t, content: value, isDirty: true }
+                          : t
+                      )
                     )
-                  )
-                }
-                basicSetup={{
-                  lineNumbers: true,
-                  highlightActiveLineGutter: false,
-                  highlightActiveLine: false,
-                  foldGutter: false,
-                }}
-              />
+                  }
+                  basicSetup={{
+                    lineNumbers: true,
+                    highlightActiveLineGutter: false,
+                    highlightActiveLine: false,
+                    foldGutter: false,
+                  }}
+                />
+              )
               )
             ) : projectRoot && tree ? (
               <div className="code-placeholder">

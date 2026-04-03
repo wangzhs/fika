@@ -26,6 +26,65 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "fileAssociations": [
+      {
+        "name": "Code and Text Files",
+        "description": "Open code and text files in fika",
+        "role": "Editor",
+        "contentTypes": [
+          "public.text",
+          "public.plain-text",
+          "public.source-code",
+          "public.json"
+        ],
+        "ext": [
+          "txt",
+          "md",
+          "json",
+          "js",
+          "jsx",
+          "ts",
+          "tsx",
+          "mjs",
+          "cjs",
+          "html",
+          "css",
+          "scss",
+          "less",
+          "py",
+          "rs",
+          "go",
+          "java",
+          "kt",
+          "swift",
+          "rb",
+          "php",
+          "sh",
+          "bash",
+          "zsh",
+          "toml",
+          "yaml",
+          "yml",
+          "xml",
+          "sql",
+          "env",
+          "gitignore",
+          "lock",
+          "csv",
+          "log"
+        ]
+      },
+      {
+        "name": "Folders",
+        "description": "Open folders in fika",
+        "role": "Editor",
+        "contentTypes": [
+          "public.folder",
+          "public.directory"
+        ],
+        "ext": []
+      }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
