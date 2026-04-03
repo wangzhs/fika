@@ -448,6 +448,7 @@ body, html, #root {
   gap: 2px;
   padding: 0 8px;
   background: #252526;
+  align-items: center;
 }
 
 .tabs button {
@@ -471,6 +472,23 @@ body, html, #root {
   color: #ffffff;
   border-bottom-color: #007acc;
   background: #1e1e1e;
+}
+
+.panel-close-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: #8f97a1;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.panel-close-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .diff-content {

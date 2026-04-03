@@ -95,6 +95,7 @@ function App() {
 
   // Bottom panel tab state
   const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("diff");
+  const [isBottomPanelOpen, setIsBottomPanelOpen] = useState(true);
 
   // Git state
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
@@ -595,6 +596,7 @@ function App() {
         options?.commit ?? undefined
       );
       setDiffSourceTab(sourceTab);
+      setIsBottomPanelOpen(true);
       setBottomPanelTab("diff");
       setSelectedDiffFile(filePath);
       setSelectedGitFilePath(filePath);
@@ -605,6 +607,7 @@ function App() {
   }, [projectRoot]);
 
   const handleOpenGitHistory = useCallback(() => {
+    setIsBottomPanelOpen(true);
     setBottomPanelTab("log");
     setSelectedCommit(null);
     setCommitFiles(null);
@@ -653,7 +656,10 @@ function App() {
   useEffect(() => {
     if (bottomPanelTab === "blame" && projectRoot && isGitRepo && activeTab) {
       getFileBlame(projectRoot, activeTab.path)
-        .then(setFileBlame)
+        .then((blame) => {
+          setIsBottomPanelOpen(true);
+          setFileBlame(blame);
+        })
         .catch(() => setFileBlame(null));
     }
   }, [bottomPanelTab, projectRoot, isGitRepo, activeTab]);
@@ -1556,15 +1562,6 @@ function App() {
               <span className="titlebar-action-icon">◷</span>
               <span>History</span>
             </button>
-            <button
-              className="titlebar-action"
-              onClick={handleCompareSelectedGitFile}
-              title={`Compare selected Git file (${shortcutLabel("D")})`}
-              disabled={!selectedGitFilePath}
-            >
-              <span className="titlebar-action-icon">≠</span>
-              <span>Compare</span>
-            </button>
           </div>
         )}
       </header>
@@ -1768,16 +1765,18 @@ function App() {
         </section>
       </div>
 
-      <div
-        className="bottom-panel-resizer"
-        onMouseDown={(e) => {
-          resizeStateRef.current = {
-            startY: e.clientY,
-            startHeight: bottomPanelHeight,
-          };
-        }}
-      />
-      <footer className="bottom-panel" style={{ height: bottomPanelHeight }}>
+      {isBottomPanelOpen && (
+        <>
+          <div
+            className="bottom-panel-resizer"
+            onMouseDown={(e) => {
+              resizeStateRef.current = {
+                startY: e.clientY,
+                startHeight: bottomPanelHeight,
+              };
+            }}
+          />
+          <footer className="bottom-panel" style={{ height: bottomPanelHeight }}>
         <div className="panel-header tabs">
           <button
             className={bottomPanelTab === "diff" ? "active" : ""}
@@ -1796,6 +1795,13 @@ function App() {
             onClick={() => setBottomPanelTab("blame")}
           >
             Blame
+          </button>
+          <button
+            className="panel-close-btn"
+            onClick={() => setIsBottomPanelOpen(false)}
+            title="Close bottom panel"
+          >
+            ×
           </button>
         </div>
         <div className="panel-content-area">
@@ -2053,7 +2059,9 @@ function App() {
             </div>
           )}
         </div>
-      </footer>
+          </footer>
+        </>
+      )}
     </div>
   );
 }
