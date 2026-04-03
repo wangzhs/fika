@@ -104,6 +104,7 @@ function App() {
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
   const [commitFiles, setCommitFiles] = useState<CommitFiles | null>(null);
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
+  const [selectedGitFilePath, setSelectedGitFilePath] = useState<string | null>(null);
   const [fileDiff, setFileDiff] = useState<FileDiff | null>(null);
   const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false);
   const [isGitRepo, setIsGitRepo] = useState(false);
@@ -129,6 +130,8 @@ function App() {
   const [navHistory, setNavHistory] = useState<NavigationEntry[]>([]);
   const [navIndex, setNavIndex] = useState(-1);
   const isNavigatingRef = useRef(false);
+  const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(260);
 
   // Editor ref for scrolling to line
   const editorRef = useRef<ReactCodeMirrorRef>(null);
@@ -280,6 +283,7 @@ function App() {
       setOpenTabs([]);
       setActiveTabPath("");
       setRecentFilePaths([]);
+      setSelectedGitFilePath(null);
       setOpenFolders(new Set([result.tree.path]));
       // Add to recent projects
       addRecentProject(result.root);
@@ -544,6 +548,7 @@ function App() {
       setActiveTabPath("");
       setRecentFilePaths([]);
       setSelectedDiffFile(null);
+      setSelectedGitFilePath(null);
       setFileDiff(null);
       setSelectedCommit(null);
       setCommitFiles(null);
@@ -560,6 +565,7 @@ function App() {
       const files = await getCommitFiles(projectRoot, commitHash);
       setSelectedCommit(commitHash);
       setCommitFiles(files);
+      setSelectedGitFilePath(files.files[0]?.path ?? null);
     } catch (e) {
       setError(String(e));
     }
@@ -571,6 +577,7 @@ function App() {
       const diff = await getFileDiff(projectRoot, filePath);
       setBottomPanelTab("diff");
       setSelectedDiffFile(filePath);
+      setSelectedGitFilePath(filePath);
       setFileDiff(diff);
     } catch (e) {
       setError(String(e));
@@ -583,10 +590,10 @@ function App() {
     setCommitFiles(null);
   }, []);
 
-  const handleCompareActiveFile = useCallback(() => {
-    if (!activeTab || !isGitRepo) return;
-    void handleShowFileDiff(activeTab.path);
-  }, [activeTab, isGitRepo, handleShowFileDiff]);
+  const handleCompareSelectedGitFile = useCallback(() => {
+    if (!selectedGitFilePath || !isGitRepo) return;
+    void handleShowFileDiff(selectedGitFilePath);
+  }, [selectedGitFilePath, isGitRepo, handleShowFileDiff]);
 
   // Refresh git data when project changes or when switching to git tabs
   useEffect(() => {
@@ -1091,9 +1098,9 @@ function App() {
       }
 
       if (isCompareFile && !isTypingTarget) {
-        if (!activeTab || !isGitRepo) return;
+        if (!selectedGitFilePath || !isGitRepo) return;
         e.preventDefault();
-        handleCompareActiveFile();
+        handleCompareSelectedGitFile();
         return;
       }
     }
@@ -1125,10 +1132,30 @@ function App() {
     goToPrevMatch,
     goBack,
     goForward,
-    activeTab,
+    selectedGitFilePath,
     isGitRepo,
-    handleCompareActiveFile,
+    handleCompareSelectedGitFile,
   ]);
+
+  useEffect(() => {
+    function onMouseMove(e: MouseEvent) {
+      const resizeState = resizeStateRef.current;
+      if (!resizeState) return;
+      const nextHeight = resizeState.startHeight + (resizeState.startY - e.clientY);
+      setBottomPanelHeight(Math.max(160, Math.min(520, nextHeight)));
+    }
+
+    function onMouseUp() {
+      resizeStateRef.current = null;
+    }
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
 
   return (
     <div className="app">
@@ -1492,16 +1519,15 @@ function App() {
               <span className="titlebar-action-icon">◷</span>
               <span>History</span>
             </button>
-            {activeTab && (
-              <button
-                className="titlebar-action"
-                onClick={handleCompareActiveFile}
-                title={`Compare current file (${shortcutLabel("D")})`}
-              >
-                <span className="titlebar-action-icon">≠</span>
-                <span>Compare</span>
-              </button>
-            )}
+            <button
+              className="titlebar-action"
+              onClick={handleCompareSelectedGitFile}
+              title={`Compare selected Git file (${shortcutLabel("D")})`}
+              disabled={!selectedGitFilePath}
+            >
+              <span className="titlebar-action-icon">≠</span>
+              <span>Compare</span>
+            </button>
           </div>
         )}
       </header>
@@ -1704,7 +1730,16 @@ function App() {
         </section>
       </div>
 
-      <footer className="bottom-panel">
+      <div
+        className="bottom-panel-resizer"
+        onMouseDown={(e) => {
+          resizeStateRef.current = {
+            startY: e.clientY,
+            startHeight: bottomPanelHeight,
+          };
+        }}
+      />
+      <footer className="bottom-panel" style={{ height: bottomPanelHeight }}>
         <div className="panel-header tabs">
           <button
             className={bottomPanelTab === "diff" ? "active" : ""}
@@ -1798,13 +1833,18 @@ function App() {
                         {stagedFiles.map((file) => (
                           <div
                             key={file.path}
-                            className="changed-file-item"
+                            className={`changed-file-item ${selectedGitFilePath === file.path ? "selected" : ""}`}
+                            onClick={() => setSelectedGitFilePath(file.path)}
+                            onDoubleClick={() => void handleShowFileDiff(file.path)}
                           >
                             <span className={`file-status status-${file.status}`}>{file.status}</span>
-                            <span className="file-path" onClick={() => handleShowFileDiff(file.path)}>{file.path}</span>
+                            <span className="file-path">{file.path}</span>
                             <button
                               className="action-btn-sm"
-                              onClick={() => handleUnstageFile(file.path)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleUnstageFile(file.path);
+                              }}
                             >
                               −
                             </button>
@@ -1838,13 +1878,18 @@ function App() {
                         {gitChanges.map((file) => (
                           <div
                             key={file.path}
-                            className="changed-file-item"
+                            className={`changed-file-item ${selectedGitFilePath === file.path ? "selected" : ""}`}
+                            onClick={() => setSelectedGitFilePath(file.path)}
+                            onDoubleClick={() => void handleShowFileDiff(file.path)}
                           >
                             <span className={`file-status status-${file.status}`}>{file.status}</span>
-                            <span className="file-path" onClick={() => handleShowFileDiff(file.path)}>{file.path}</span>
+                            <span className="file-path">{file.path}</span>
                             <button
                               className="action-btn-sm"
-                              onClick={() => handleStageFile(file.path)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleStageFile(file.path);
+                              }}
                             >
                               +
                             </button>
@@ -1906,8 +1951,9 @@ function App() {
                       commitFiles.files.map((file) => (
                         <div
                           key={file.path}
-                          className="changed-file-item"
-                          onClick={() => handleOpenFile(file.path)}
+                          className={`changed-file-item ${selectedGitFilePath === file.path ? "selected" : ""}`}
+                          onClick={() => setSelectedGitFilePath(file.path)}
+                          onDoubleClick={() => void handleOpenFile(file.path)}
                         >
                           <span className={`file-status status-${file.status}`}>{file.status}</span>
                           <span className="file-path">{file.path}</span>

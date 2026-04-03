@@ -100,6 +100,16 @@ body, html, #root {
   color: #ffffff;
 }
 
+.titlebar-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.titlebar-action:disabled:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: #c8cdd5;
+}
+
 .titlebar-action-icon {
   font-size: 12px;
   line-height: 1;
@@ -402,6 +412,19 @@ body, html, #root {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+}
+
+.bottom-panel-resizer {
+  height: 6px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: #181a1d;
+  border-top: 1px solid #16181b;
+  border-bottom: 1px solid #26292d;
+}
+
+.bottom-panel-resizer:hover {
+  background: #25292e;
 }
 
 .tabs {
@@ -890,6 +913,10 @@ body, html, #root {
 
 .changed-file-item:hover {
   background: #2a2d2e;
+}
+
+.changed-file-item.selected {
+  background: #21384a;
 }
 
 .file-status {
