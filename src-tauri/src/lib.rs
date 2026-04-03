@@ -222,13 +222,13 @@ async fn search_in_project(root: String, query: String) -> Result<Vec<SearchResu
         return Ok(vec![]);
     }
 
+    if let Ok(results) = search_with_ripgrep(&root, &query) {
+        return Ok(results);
+    }
+
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
-
-    // Search recursively - individual directory/file errors are ignored
-    // and the search continues with other paths
     search_recursive(Path::new(&root), &query_lower, &mut results);
-
     Ok(results)
 }
 
@@ -282,6 +282,77 @@ fn search_recursive(dir: &Path, query: &str, results: &mut Vec<SearchResult>) {
             }
         }
     }
+}
+
+fn search_with_ripgrep(root: &str, query: &str) -> Result<Vec<SearchResult>, String> {
+    let output = Command::new("rg")
+        .args([
+            "--json",
+            "--line-number",
+            "--smart-case",
+            "--hidden",
+            "--glob", "!.git",
+            "--glob", "!node_modules",
+            "--glob", "!dist",
+            "--glob", "!target",
+            "--glob", "!.next",
+            "--glob", "!coverage",
+            "--glob", "!.turbo",
+            "--glob", "!.cache",
+            "--glob", "!build",
+            "--glob", "!out",
+            query,
+            root,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run rg: {}", e))?;
+
+    if !output.status.success() && output.status.code() != Some(1) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("rg failed: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut results = Vec::new();
+
+    for line in stdout.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+
+        if event.get("type").and_then(|t| t.as_str()) != Some("match") {
+            continue;
+        }
+
+        let data = &event["data"];
+        let path = data["path"]["text"].as_str().unwrap_or_default().to_string();
+        let line_number = data["line_number"].as_u64().unwrap_or(0) as usize;
+        let line_text = data["lines"]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .trim_end_matches('\n')
+            .to_string();
+
+        let matched_fragment = data["submatches"]
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(|item| item["match"]["text"].as_str())
+            .map(|text| text.to_string())
+            .unwrap_or_else(|| extract_matched_fragment(&line_text, query));
+
+        results.push(SearchResult {
+            path,
+            line_number,
+            line_content: line_text,
+            matched_fragment,
+        });
+
+        if results.len() >= 300 {
+            break;
+        }
+    }
+
+    Ok(results)
 }
 
 // Git helpers
