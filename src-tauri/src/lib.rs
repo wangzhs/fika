@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
-    Emitter, Manager, WindowEvent,
+    Manager, WindowEvent,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
@@ -1213,18 +1213,6 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
     )
 }
 
-fn emit_menu_event(app: &tauri::AppHandle, event: &str) {
-    let target = app
-        .webview_windows()
-        .into_values()
-        .find(|window| window.is_focused().unwrap_or(false))
-        .or_else(|| app.webview_windows().into_values().next());
-
-    if let Some(window) = target {
-        let _ = window.emit(event, ());
-    }
-}
-
 fn eval_in_focused_window(app: &tauri::AppHandle, script: &str) {
     let target = app
         .webview_windows()
@@ -1245,10 +1233,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .on_menu_event(|app, event| match event.id().as_ref() {
-            MENU_OPEN_FOLDER => emit_menu_event(app, "fika://menu-open-folder"),
-            MENU_OPEN_RECENT => emit_menu_event(app, "fika://show-recent-projects"),
+            MENU_OPEN_FOLDER => eval_in_focused_window(app, "window.__FIKA_OPEN_FOLDER__?.()"),
+            MENU_OPEN_RECENT => {
+                eval_in_focused_window(app, "window.__FIKA_SHOW_RECENT_PROJECTS__?.()")
+            }
             MENU_OPEN_FOLDER_NEW_WINDOW => {
-                emit_menu_event(app, "fika://menu-open-folder-new-window")
+                eval_in_focused_window(app, "window.__FIKA_OPEN_FOLDER_NEW_WINDOW__?.()")
             }
             MENU_CLOSE_TAB => eval_in_focused_window(app, "window.__FIKA_CLOSE_ACTIVE_TAB__?.()"),
             _ => {}

@@ -124,6 +124,9 @@ function isMacPlatform() {
 declare global {
   interface Window {
     __FIKA_CLOSE_ACTIVE_TAB__?: () => void;
+    __FIKA_OPEN_FOLDER__?: () => void;
+    __FIKA_SHOW_RECENT_PROJECTS__?: () => void;
+    __FIKA_OPEN_FOLDER_NEW_WINDOW__?: () => void;
     __FIKA_SESSION_RESTORED__?: boolean;
   }
 }
@@ -547,6 +550,7 @@ function App() {
       height: 900,
       minWidth: 1100,
       minHeight: 720,
+      url: window.location.href,
     });
 
     nextWindow.once("tauri://created", () => {
@@ -788,6 +792,24 @@ function App() {
       delete window.__FIKA_CLOSE_ACTIVE_TAB__;
     };
   }, [activeTabPath, handleCloseTab]);
+
+  useEffect(() => {
+    window.__FIKA_OPEN_FOLDER__ = () => {
+      void handleOpenFolder();
+    };
+    window.__FIKA_SHOW_RECENT_PROJECTS__ = () => {
+      setRecentProjectsOpen(true);
+    };
+    window.__FIKA_OPEN_FOLDER_NEW_WINDOW__ = () => {
+      void createProjectWindow();
+    };
+
+    return () => {
+      delete window.__FIKA_OPEN_FOLDER__;
+      delete window.__FIKA_SHOW_RECENT_PROJECTS__;
+      delete window.__FIKA_OPEN_FOLDER_NEW_WINDOW__;
+    };
+  }, [createProjectWindow, handleOpenFolder]);
 
   const editorKeybindings = useMemo(
     () =>
@@ -1380,9 +1402,6 @@ function App() {
 
   useEffect(() => {
     let unlistenOpenProject: (() => void) | undefined;
-    let unlistenShowRecent: (() => void) | undefined;
-    let unlistenMenuOpenFolder: (() => void) | undefined;
-    let unlistenMenuOpenFolderNewWindow: (() => void) | undefined;
 
     getCurrentWindow().listen<string>("fika://open-project-path", async (event) => {
       await handleOpenFolderWithSession(event.payload);
@@ -1390,31 +1409,10 @@ function App() {
       unlistenOpenProject = unlisten;
     });
 
-    getCurrentWindow().listen("fika://show-recent-projects", () => {
-      setRecentProjectsOpen(true);
-    }).then((unlisten) => {
-      unlistenShowRecent = unlisten;
-    });
-
-    getCurrentWindow().listen("fika://menu-open-folder", () => {
-      void handleOpenFolder();
-    }).then((unlisten) => {
-      unlistenMenuOpenFolder = unlisten;
-    });
-
-    getCurrentWindow().listen("fika://menu-open-folder-new-window", () => {
-      void createProjectWindow();
-    }).then((unlisten) => {
-      unlistenMenuOpenFolderNewWindow = unlisten;
-    });
-
     return () => {
       unlistenOpenProject?.();
-      unlistenShowRecent?.();
-      unlistenMenuOpenFolder?.();
-      unlistenMenuOpenFolderNewWindow?.();
     };
-  }, [createProjectWindow, handleOpenFolder, handleOpenFolderWithSession]);
+  }, [handleOpenFolderWithSession]);
 
   useEffect(() => {
     setSelectedIndex(0);
