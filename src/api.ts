@@ -13,6 +13,10 @@ export function writeFile(path: string, content: string) {
   return invoke<void>("write_file", { path, content });
 }
 
+export function setUnsavedChangesFlag(hasUnsavedChanges: boolean) {
+  return invoke<void>("set_unsaved_changes_flag", { hasUnsavedChanges });
+}
+
 export function searchInProject(root: string, query: string) {
   return invoke<SearchResult[]>("search_in_project", { root, query });
 }

@@ -15,7 +15,7 @@ import {
   getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles,
   getFileBlame, stageFile, unstageFile, commit, getStagedFiles,
   createFile, createDirectory, renamePath, deletePath, refreshTree,
-  saveRecentProjects, loadRecentProjects, saveSession, loadSession
+  saveRecentProjects, loadRecentProjects, saveSession, loadSession, setUnsavedChangesFlag
 } from "./api";
 import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
@@ -1028,22 +1028,7 @@ function App() {
   }, [hasDirtyTabs]);
 
   useEffect(() => {
-    const currentWindow = getCurrentWindow();
-
-    let unlisten: (() => void) | undefined;
-    currentWindow.onCloseRequested(async (event) => {
-      if (!hasDirtyTabs) return;
-      const shouldClose = window.confirm("You have unsaved changes. Close anyway?");
-      if (!shouldClose) {
-        event.preventDefault();
-      }
-    }).then((fn) => {
-      unlisten = fn;
-    }).catch(() => {});
-
-    return () => {
-      unlisten?.();
-    };
+    setUnsavedChangesFlag(hasDirtyTabs).catch(() => {});
   }, [hasDirtyTabs]);
 
   // Save session state when relevant state changes (debounced)

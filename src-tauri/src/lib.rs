@@ -2,7 +2,15 @@ use serde::{Serialize, Deserialize};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use tauri_plugin_dialog::DialogExt;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{Manager, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+#[derive(Default)]
+struct CloseGuard {
+    has_unsaved_changes: AtomicBool,
+    allow_next_close: AtomicBool,
+}
 
 #[derive(Serialize, Clone)]
 pub struct FileNode {
@@ -214,6 +222,17 @@ async fn read_file(path: String) -> Result<String, String> {
 #[tauri::command]
 async fn write_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+#[tauri::command]
+async fn set_unsaved_changes_flag(
+    state: tauri::State<'_, CloseGuard>,
+    has_unsaved_changes: bool,
+) -> Result<(), String> {
+    state
+        .has_unsaved_changes
+        .store(has_unsaved_changes, Ordering::SeqCst);
+    Ok(())
 }
 
 #[tauri::command]
@@ -903,7 +922,6 @@ async fn refresh_tree(root: String) -> Result<FileNode, String> {
 }
 
 // Persistence - using simple JSON files in app's config directory
-use tauri::Manager;
 
 fn get_config_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     app_handle.path().app_config_dir()
@@ -1005,10 +1023,49 @@ async fn load_session(app_handle: tauri::AppHandle) -> Result<SessionState, Stri
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(CloseGuard::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let guard = window.state::<CloseGuard>();
+                if guard.allow_next_close.swap(false, Ordering::SeqCst) {
+                    return;
+                }
+                if !guard.has_unsaved_changes.load(Ordering::SeqCst) {
+                    return;
+                }
+
+                api.prevent_close();
+
+                let app = window.app_handle().clone();
+                let label = window.label().to_string();
+                std::thread::spawn(move || {
+                    let should_close = app
+                        .dialog()
+                        .message("You have unsaved changes. Close anyway?")
+                        .title("Unsaved Changes")
+                        .buttons(MessageDialogButtons::OkCancelCustom(
+                            "Close".to_string(),
+                            "Cancel".to_string(),
+                        ))
+                        .blocking_show();
+
+                    if !should_close {
+                        return;
+                    }
+
+                    let guard = app.state::<CloseGuard>();
+                    guard.allow_next_close.store(true, Ordering::SeqCst);
+
+                    if let Some(window) = app.get_webview_window(&label) {
+                        let _ = window.close();
+                    }
+                });
+            }
+        })
         .invoke_handler(tauri::generate_handler![
-            open_folder, read_file, write_file, search_in_project,
+            open_folder, read_file, write_file, set_unsaved_changes_flag, search_in_project,
             get_current_branch, get_branches, switch_branch,
             get_git_history, get_working_tree_changes, get_file_diff, get_commit_files,
             get_file_blame, stage_file, unstage_file, commit, get_staged_files,
