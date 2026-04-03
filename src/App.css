@@ -842,6 +842,40 @@ body, html, #root {
   max-height: 500px;
 }
 
+.discard-modal {
+  width: 520px;
+}
+
+.discard-modal-body {
+  padding: 18px 18px 6px;
+}
+
+.discard-modal-title {
+  color: #eceff3;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.discard-modal-path {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #1f2124;
+  border: 1px solid #31353a;
+  color: #c7ced8;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.discard-modal-note {
+  margin-top: 12px;
+  color: #98a2ad;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .finder-actions {
   padding: 8px 14px;
   background: #2d2d2d;
@@ -869,6 +903,15 @@ body, html, #root {
   background: #3c3c3c;
   color: #808080;
   cursor: not-allowed;
+}
+
+.discard-btn {
+  background: #7a2f32;
+  color: #ffe1df;
+}
+
+.discard-btn:hover:not(:disabled) {
+  background: #914145;
 }
 
 .search-results {
@@ -1343,6 +1386,10 @@ body, html, #root {
 
 .blame-line:hover {
   background: #2a2d2e;
+}
+
+.blame-line.selected {
+  background: #22384e;
 }
 
 .blame-hash {

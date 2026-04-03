@@ -17,6 +17,10 @@ export function setUnsavedChangesFlag(hasUnsavedChanges: boolean) {
   return invoke<void>("set_unsaved_changes_flag", { hasUnsavedChanges });
 }
 
+export function confirmDiscardFile(file: string) {
+  return invoke<boolean>("confirm_discard_file", { file });
+}
+
 export function searchInProject(root: string, query: string) {
   return invoke<SearchResult[]>("search_in_project", { root, query });
 }
@@ -34,8 +38,8 @@ export function switchBranch(path: string, branch: string) {
   return invoke<void>("switch_branch", { path, branch });
 }
 
-export function getGitHistory(path: string, maxCount?: number) {
-  return invoke<Commit[]>("get_git_history", { path, maxCount });
+export function getGitHistory(path: string, maxCount?: number, file?: string) {
+  return invoke<Commit[]>("get_git_history", { path, maxCount, file });
 }
 
 export function getWorkingTreeChanges(path: string) {
@@ -46,8 +50,8 @@ export function getFileDiff(path: string, file: string, staged?: boolean, commit
   return invoke<FileDiff>("get_file_diff", { path, file, staged, commit });
 }
 
-export function getCommitFiles(path: string, commit: string) {
-  return invoke<CommitFiles>("get_commit_files", { path, commit });
+export function getCommitFiles(path: string, commit: string, file?: string) {
+  return invoke<CommitFiles>("get_commit_files", { path, commit, file });
 }
 
 // Git Blame API
@@ -62,6 +66,10 @@ export function stageFile(path: string, file: string) {
 
 export function unstageFile(path: string, file: string) {
   return invoke<void>("unstage_file", { path, file });
+}
+
+export function discardFileChanges(path: string, file: string) {
+  return invoke<void>("discard_file_changes", { path, file });
 }
 
 export function commit(path: string, message: string) {

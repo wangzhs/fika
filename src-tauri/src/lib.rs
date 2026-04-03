@@ -236,6 +236,24 @@ async fn set_unsaved_changes_flag(
 }
 
 #[tauri::command]
+async fn confirm_discard_file(handle: tauri::AppHandle, file: String) -> Result<bool, String> {
+    let confirmed = handle
+        .dialog()
+        .message(format!(
+            "Revert this file to the Git version?\n\n{}\n\nThis will discard local changes for this file.",
+            file
+        ))
+        .title("Revert File")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Revert".to_string(),
+            "Cancel".to_string(),
+        ))
+        .blocking_show();
+
+    Ok(confirmed)
+}
+
+#[tauri::command]
 async fn search_in_project(root: String, query: String) -> Result<Vec<SearchResult>, String> {
     if query.is_empty() {
         return Ok(vec![]);
@@ -474,17 +492,26 @@ async fn switch_branch(path: String, branch: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn get_git_history(path: String, max_count: Option<usize>) -> Result<Vec<Commit>, String> {
+async fn get_git_history(path: String, max_count: Option<usize>, file: Option<String>) -> Result<Vec<Commit>, String> {
     if !is_git_repo(&path) {
         return Ok(vec![]);
     }
 
     let count = max_count.unwrap_or(50);
     let format = "%H|%h|%s|%an|%ar";
-    let output = run_git_command(
-        &["log", &format!("-n{}", count), &format!("--format={}", format)],
-        &path,
-    )?;
+    let count_arg = format!("-n{}", count);
+    let format_arg = format!("--format={}", format);
+    let output = if let Some(file_path) = file.filter(|value| !value.trim().is_empty()) {
+        run_git_command(
+            &["log", &count_arg, &format_arg, "--", &file_path],
+            &path,
+        )?
+    } else {
+        run_git_command(
+            &["log", &count_arg, &format_arg],
+            &path,
+        )?
+    };
 
     let mut commits = Vec::new();
 
@@ -581,12 +608,16 @@ async fn get_file_diff(path: String, file: String, staged: Option<bool>, commit:
 }
 
 #[tauri::command]
-async fn get_commit_files(path: String, commit: String) -> Result<CommitFiles, String> {
+async fn get_commit_files(path: String, commit: String, file: Option<String>) -> Result<CommitFiles, String> {
     if !is_git_repo(&path) {
         return Err("Not a git repository".to_string());
     }
 
-    let output = run_git_command(&["show", "--name-status", "--format=", &commit], &path)?;
+    let output = if let Some(file_path) = file.filter(|value| !value.trim().is_empty()) {
+        run_git_command(&["show", "--name-status", "--format=", &commit, "--", &file_path], &path)?
+    } else {
+        run_git_command(&["show", "--name-status", "--format=", &commit], &path)?
+    };
     let mut files = Vec::new();
 
     for line in output.lines() {
@@ -833,6 +864,37 @@ async fn unstage_file(path: String, file: String) -> Result<(), String> {
     }
 
     run_git_command(&["reset", "HEAD", &file], &path).map(|_| ())
+}
+
+#[tauri::command]
+async fn discard_file_changes(path: String, file: String) -> Result<(), String> {
+    if !is_git_repo(&path) {
+        return Err("Not a git repository".to_string());
+    }
+
+    let file_path = Path::new(&path).join(&file);
+    if !file_path.exists() {
+        return Ok(());
+    }
+
+    let untracked_output =
+        run_git_command(&["ls-files", "--others", "--exclude-standard", "--", &file], &path)?;
+    if !untracked_output.trim().is_empty() {
+        if file_path.is_dir() {
+            fs::remove_dir_all(&file_path)
+                .map_err(|e| format!("Failed to remove file: {}", e))?;
+        } else {
+            fs::remove_file(&file_path)
+                .map_err(|e| format!("Failed to remove file: {}", e))?;
+        }
+        return Ok(());
+    }
+
+    run_git_command(
+        &["restore", "--source=HEAD", "--staged", "--worktree", "--", &file],
+        &path,
+    )
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -1094,10 +1156,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            open_folder, read_file, write_file, set_unsaved_changes_flag, search_in_project,
+            open_folder, read_file, write_file, set_unsaved_changes_flag, confirm_discard_file, search_in_project,
             get_current_branch, get_branches, switch_branch,
             get_git_history, get_working_tree_changes, get_file_diff, get_commit_files,
-            get_file_blame, stage_file, unstage_file, commit, get_staged_files,
+            get_file_blame, stage_file, unstage_file, discard_file_changes, commit, get_staged_files,
             create_file, create_directory, rename_path, delete_path, refresh_tree,
             save_recent_projects, load_recent_projects, save_session, load_session
         ])

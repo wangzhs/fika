@@ -9,10 +9,11 @@ interface FileTreeProps {
   depth: number;
   openFolders: Set<string>;
   toggleFolder: (p: string) => void;
-  selectedFile: string;
+  selectedPath: string;
   projectRoot?: string | null;
   gitStatusByPath?: Record<string, GitFileStatus>;
   onSelectFile: (path: string) => void;
+  onSelectPath: (path: string, isDir: boolean) => void;
   onContextMenu?: (path: string, isDir: boolean, e: React.MouseEvent) => void;
 }
 
@@ -21,10 +22,11 @@ export function FileTree({
   depth,
   openFolders,
   toggleFolder,
-  selectedFile,
+  selectedPath,
   projectRoot,
   gitStatusByPath,
   onSelectFile,
+  onSelectPath,
   onContextMenu,
 }: FileTreeProps) {
   if (!node.is_dir) {
@@ -37,9 +39,12 @@ export function FileTree({
     const gitStatus = gitStatusByPath?.[relativePath] ?? null;
     return (
       <li
-        className={`tree-file ${selectedFile === node.path ? "active" : ""}`}
+        className={`tree-file ${selectedPath === node.path ? "active" : ""}`}
         style={{ paddingLeft: 8 + depth * 14 }}
-        onClick={() => onSelectFile(node.path)}
+        onClick={() => {
+          onSelectPath(node.path, false);
+          onSelectFile(node.path);
+        }}
         onContextMenu={(e) => onContextMenu?.(node.path, false, e)}
       >
         <span className={`tree-bullet ${gitStatus ? `git-status-${gitStatus}` : ""}`} />
@@ -53,9 +58,12 @@ export function FileTree({
   return (
     <>
       <li
-        className="tree-folder"
+        className={`tree-folder ${selectedPath === node.path ? "active" : ""}`}
         style={{ paddingLeft: 8 + depth * 14 }}
-        onClick={() => toggleFolder(node.path)}
+        onClick={() => {
+          onSelectPath(node.path, true);
+          toggleFolder(node.path);
+        }}
         onContextMenu={(e) => onContextMenu?.(node.path, true, e)}
       >
         <span className="tree-chevron">{isOpen ? "▼" : "▶"}</span>
@@ -69,10 +77,11 @@ export function FileTree({
             depth={depth + 1}
             openFolders={openFolders}
             toggleFolder={toggleFolder}
-            selectedFile={selectedFile}
+            selectedPath={selectedPath}
             projectRoot={projectRoot}
             gitStatusByPath={gitStatusByPath}
             onSelectFile={onSelectFile}
+            onSelectPath={onSelectPath}
             onContextMenu={onContextMenu}
           />
         ))}

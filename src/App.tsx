@@ -13,7 +13,7 @@ import {
   openFolder, readFile, writeFile, searchInProject,
   getCurrentBranch, getBranches, switchBranch,
   getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles,
-  getFileBlame, stageFile, unstageFile, commit, getStagedFiles,
+  getFileBlame, stageFile, unstageFile, discardFileChanges, commit, getStagedFiles,
   createFile, createDirectory, renamePath, deletePath, refreshTree,
   saveRecentProjects, loadRecentProjects, saveSession, loadSession, setUnsavedChangesFlag
 } from "./api";
@@ -138,6 +138,7 @@ function App() {
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
   const [openTabs, setOpenTabs] = useState<EditorDocument[]>([]);
   const [activeTabPath, setActiveTabPath] = useState<string>("");
+  const [selectedTreePath, setSelectedTreePath] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [recentFilePaths, setRecentFilePaths] = useState<string[]>([]);
 
@@ -170,6 +171,7 @@ function App() {
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [gitHistory, setGitHistory] = useState<Commit[]>([]);
+  const [gitHistoryFilePath, setGitHistoryFilePath] = useState<string | null>(null);
   const [gitChanges, setGitChanges] = useState<ChangedFile[]>([]);
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
   const [commitFiles, setCommitFiles] = useState<CommitFiles | null>(null);
@@ -183,6 +185,7 @@ function App() {
 
   // Git blame state
   const [fileBlame, setFileBlame] = useState<FileBlame | null>(null);
+  const [selectedBlameCommitHash, setSelectedBlameCommitHash] = useState<string | null>(null);
 
   // Git staging/commit state
   const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
@@ -197,6 +200,7 @@ function App() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
   const [renameModal, setRenameModal] = useState<{ path: string; isDir: boolean; newName: string } | null>(null);
   const [newFileModal, setNewFileModal] = useState<{ dirPath: string; name: string; isDir: boolean } | null>(null);
+  const [discardFileModalPath, setDiscardFileModalPath] = useState<string | null>(null);
 
   // Navigation history state
   const [navHistory, setNavHistory] = useState<NavigationEntry[]>([]);
@@ -492,6 +496,7 @@ function App() {
       setTree(result.tree);
       setOpenTabs([]);
       setActiveTabPath("");
+      setSelectedTreePath(result.tree.path);
       setRecentFilePaths([]);
       setSelectedGitFilePath(null);
       setOpenFolders(new Set([result.tree.path]));
@@ -573,6 +578,7 @@ function App() {
               )
             : [...prev, { ...newTab, content, originalContent: content, isLoading: false }]
         );
+        setSelectedTreePath(path);
         updateRecentFiles(path);
         addToNavHistory(path, lineNumber);
         // If line number specified, scroll to it after content is loaded
@@ -671,6 +677,7 @@ function App() {
 
   const handleSwitchTab = useCallback((path: string) => {
     setActiveTabPath(path);
+    setSelectedTreePath(path);
     updateRecentFiles(path);
   }, [updateRecentFiles]);
 
@@ -775,9 +782,11 @@ function App() {
 
     if (historyResult.status === 'fulfilled') {
       setGitHistory(historyResult.value);
+      setGitHistoryFilePath(null);
       if (historyResult.value.length > 0) isRepo = true;
     } else {
       setGitHistory([]);
+      setGitHistoryFilePath(null);
     }
 
     if (changesResult.status === 'fulfilled') {
@@ -834,18 +843,6 @@ function App() {
     }
   }, [projectRoot, refreshGitData, openTabs]);
 
-  const handleShowCommitFiles = useCallback(async (commitHash: string) => {
-    if (!projectRoot) return;
-    try {
-      const files = await getCommitFiles(projectRoot, commitHash);
-      setSelectedCommit(commitHash);
-      setCommitFiles(files);
-      setSelectedGitFilePath(files.files[0]?.path ?? null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [projectRoot]);
-
   const handleShowFileDiff = useCallback(async (filePath: string, options?: { staged?: boolean; commit?: string | null }) => {
     if (!projectRoot) return;
     try {
@@ -867,12 +864,48 @@ function App() {
     }
   }, [projectRoot]);
 
-  const handleOpenGitHistory = useCallback(() => {
+  const handleShowBlameCommitDiff = useCallback(async () => {
+    if (!projectRoot || !activeTab || !selectedBlameCommitHash) return;
+    const relativePath = toProjectRelativePath(activeTab.path);
+    await handleShowFileDiff(relativePath, { commit: selectedBlameCommitHash });
+  }, [projectRoot, activeTab, selectedBlameCommitHash, toProjectRelativePath, handleShowFileDiff]);
+
+  const handleShowCommitFiles = useCallback(async (commitHash: string) => {
+    if (!projectRoot) return;
+    if (gitHistoryFilePath) {
+      await handleShowFileDiff(gitHistoryFilePath, { commit: commitHash });
+      return;
+    }
+    try {
+      const files = await getCommitFiles(projectRoot, commitHash, gitHistoryFilePath ?? undefined);
+      setSelectedCommit(commitHash);
+      setCommitFiles(files);
+      setSelectedGitFilePath(files.files[0]?.path ?? null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot, gitHistoryFilePath, handleShowFileDiff]);
+
+  const handleOpenGitHistory = useCallback(async () => {
+    if (projectRoot) {
+      try {
+        const historyPath = selectedTreePath
+          ? toProjectRelativePath(selectedTreePath)
+          : activeTab
+            ? toProjectRelativePath(activeTab.path)
+            : undefined;
+        const history = await getGitHistory(projectRoot, 50, historyPath);
+        setGitHistory(history);
+        setGitHistoryFilePath(historyPath ?? null);
+      } catch (e) {
+        setError(String(e));
+      }
+    }
     setIsBottomPanelOpen(true);
     setBottomPanelTab("log");
     setSelectedCommit(null);
     setCommitFiles(null);
-  }, []);
+  }, [activeTab, projectRoot, selectedTreePath, toProjectRelativePath]);
 
   const handleCloseDiffView = useCallback(() => {
     setSelectedDiffFile(null);
@@ -958,8 +991,12 @@ function App() {
         .then((blame) => {
           setIsBottomPanelOpen(true);
           setFileBlame(blame);
+          setSelectedBlameCommitHash(blame.lines[0]?.commit_hash ?? null);
         })
-        .catch(() => setFileBlame(null));
+        .catch(() => {
+          setFileBlame(null);
+          setSelectedBlameCommitHash(null);
+        });
     }
   }, [bottomPanelTab, projectRoot, isGitRepo, activeTab]);
 
@@ -995,6 +1032,52 @@ function App() {
       setError(String(e));
     }
   }, [projectRoot]);
+
+  const performDiscardFileChanges = useCallback(async (filePath: string) => {
+    if (!projectRoot) return;
+
+    try {
+      await discardFileChanges(projectRoot, filePath);
+
+      const absolutePath = projectRoot
+        ? `${normalizeFilePath(projectRoot).replace(/\/$/, "")}/${normalizeFilePath(filePath)}`
+        : filePath;
+
+      const existsAfterDiscard = allFilePaths.includes(absolutePath) || openTabs.some((tab) => tab.path === absolutePath);
+
+      if (activeTab?.path === absolutePath) {
+        try {
+          const content = await readFile(absolutePath);
+          setOpenTabs((prev) =>
+            prev.map((tab) =>
+              tab.path === absolutePath
+                ? { ...tab, content, originalContent: content, isDirty: false }
+                : tab
+            )
+          );
+        } catch {
+          setOpenTabs((prev) => prev.filter((tab) => tab.path !== absolutePath));
+          if (activeTabPath === absolutePath) {
+            setActiveTabPath("");
+          }
+        }
+      } else if (!existsAfterDiscard) {
+        setOpenTabs((prev) => prev.filter((tab) => tab.path !== absolutePath));
+      }
+
+      const newTree = await refreshTree(projectRoot);
+      setTree(newTree);
+      await refreshGitData();
+      setSelectedDiffFile(null);
+      setFileDiff(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot, allFilePaths, openTabs, activeTab, activeTabPath, refreshGitData]);
+
+  const handleDiscardFileChanges = useCallback((filePath: string) => {
+    setDiscardFileModalPath(filePath);
+  }, []);
 
   const handleCommit = useCallback(async () => {
     if (!projectRoot || !commitMessage.trim()) return;
@@ -1467,8 +1550,12 @@ function App() {
       }
 
       if (isCompareFile && !isTypingTarget) {
-        if (!selectedGitFilePath || !isGitRepo) return;
+        if (!isGitRepo) return;
         e.preventDefault();
+        if (bottomPanelTab === "blame") {
+          void handleShowBlameCommitDiff();
+          return;
+        }
         handleCompareSelectedGitFile();
         return;
       }
@@ -1504,7 +1591,9 @@ function App() {
     goForward,
     selectedGitFilePath,
     isGitRepo,
+    bottomPanelTab,
     handleCompareSelectedGitFile,
+    handleShowBlameCommitDiff,
     handleCloseDiffView,
   ]);
 
@@ -1860,6 +1949,38 @@ function App() {
         </div>
       )}
 
+      {discardFileModalPath && (
+        <div className="finder-overlay" onClick={() => setDiscardFileModalPath(null)}>
+          <div className="finder-modal discard-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="finder-header">Revert File</div>
+            <div className="discard-modal-body">
+              <div className="discard-modal-title">Revert this file to the Git version?</div>
+              <div className="discard-modal-path">{discardFileModalPath}</div>
+              <div className="discard-modal-note">
+                This will discard local changes for this file.
+              </div>
+            </div>
+            <div className="finder-actions">
+              <button className="search-btn" onClick={() => setDiscardFileModalPath(null)}>
+                Cancel
+              </button>
+              <button
+                className="search-btn discard-btn"
+                onClick={async () => {
+                  const targetPath = discardFileModalPath;
+                  setDiscardFileModalPath(null);
+                  if (targetPath) {
+                    await performDiscardFileChanges(targetPath);
+                  }
+                }}
+              >
+                Revert
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="titlebar">
         <div className="titlebar-leading">
           <span className="logo">Fika</span>
@@ -1923,10 +2044,13 @@ function App() {
                   depth={0}
                   openFolders={openFolders}
                   toggleFolder={toggleFolder}
-                  selectedFile={activeTabPath}
+                  selectedPath={selectedTreePath || activeTabPath}
                   projectRoot={projectRoot}
                   gitStatusByPath={gitStatusByPath}
                   onSelectFile={handleOpenFile}
+                  onSelectPath={(path) => {
+                    setSelectedTreePath(path);
+                  }}
                   onContextMenu={(path, isDir, e) => {
                     e.stopPropagation();
                     setContextMenu({ x: e.clientX, y: e.clientY, path, isDir });
@@ -2161,6 +2285,14 @@ function App() {
                       ← Back to {diffSourceTab === "log" ? "history" : "changes"}
                     </button>
                     <span className="diff-file-path">{fileDiff.path}</span>
+                    {diffSourceTab === "diff" && (
+                      <button
+                        className="action-btn"
+                        onClick={() => void handleDiscardFileChanges(fileDiff.path)}
+                      >
+                        Revert File
+                      </button>
+                    )}
                   </div>
                   <div className="diff-content">
                     {fileDiff.hunks.length === 0 ? (
@@ -2231,6 +2363,16 @@ function App() {
                             >
                               −
                             </button>
+                            <button
+                              className="action-btn-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleDiscardFileChanges(file.path);
+                              }}
+                              title="Discard file changes"
+                            >
+                              ↺
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -2275,6 +2417,16 @@ function App() {
                               }}
                             >
                               +
+                            </button>
+                            <button
+                              className="action-btn-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleDiscardFileChanges(file.path);
+                              }}
+                              title="Discard file changes"
+                            >
+                              ↺
                             </button>
                           </div>
                         ))}
@@ -2347,6 +2499,11 @@ function App() {
                 </div>
               ) : (
                 <div className="commit-list">
+                  {gitHistoryFilePath && (
+                    <div className="changes-section-header">
+                      <span>History for {gitHistoryFilePath}</span>
+                    </div>
+                  )}
                   {gitHistory.length === 0 ? (
                     <div className="git-empty">No commits found</div>
                   ) : (
@@ -2382,7 +2539,12 @@ function App() {
               ) : fileBlame ? (
                 <div className="blame-view">
                   {fileBlame.lines.map((line, idx) => (
-                    <div key={idx} className="blame-line">
+                    <div
+                      key={idx}
+                      className={`blame-line ${selectedBlameCommitHash === line.commit_hash ? "selected" : ""}`}
+                      onClick={() => setSelectedBlameCommitHash(line.commit_hash)}
+                      onDoubleClick={() => void handleShowBlameCommitDiff()}
+                    >
                       <span className="blame-hash" title={line.commit_hash}>
                         {line.short_hash}
                       </span>
