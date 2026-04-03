@@ -1251,8 +1251,13 @@ function App() {
                       setGlobalSearchOpen(false);
                     }}
                   >
-                    <div className="search-result-path">
-                      {toRelativePath(projectRoot, result.path)}:{result.line_number}
+                    <div className="search-result-meta">
+                      <div className="search-result-path">
+                        {toRelativePath(projectRoot, result.path)}
+                      </div>
+                      <div className="search-result-line-badge">
+                        Line {result.line_number}
+                      </div>
                     </div>
                     <div className="search-result-content">
                       {result.matched_fragment}
