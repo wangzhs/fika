@@ -15,10 +15,8 @@ export interface FolderResult {
 export interface EditorDocument {
   path: string;
   content: string;
-  originalContent: string;
   isDirty: boolean;
   isLoading: boolean;
-  isSaving: boolean;
 }
 
 export interface SearchResult {

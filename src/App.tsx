@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { dracula } from "@uiw/codemirror-theme-dracula";
-import { EditorView, Decoration, gutter, GutterMarker, WidgetType } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
@@ -50,153 +48,6 @@ function toRelativePath(root: string | null, absolutePath: string) {
 function isMacPlatform() {
   if (typeof navigator === "undefined") return false;
   return /Mac|iPhone|iPad/i.test(navigator.platform);
-}
-
-function computeLineChangeSet(originalContent: string, currentContent: string) {
-  const originalLines = originalContent.split("\n");
-  const currentLines = currentContent.split("\n");
-
-  let prefixLength = 0;
-  const maxPrefix = Math.min(originalLines.length, currentLines.length);
-  while (
-    prefixLength < maxPrefix &&
-    originalLines[prefixLength] === currentLines[prefixLength]
-  ) {
-    prefixLength += 1;
-  }
-
-  let originalSuffix = originalLines.length - 1;
-  let currentSuffix = currentLines.length - 1;
-  while (
-    originalSuffix >= prefixLength &&
-    currentSuffix >= prefixLength &&
-    originalLines[originalSuffix] === currentLines[currentSuffix]
-  ) {
-    originalSuffix -= 1;
-    currentSuffix -= 1;
-  }
-
-  const modifiedLines = new Set<number>();
-  const addedLines = new Set<number>();
-  const deletedAnchors: Array<{ line: number; count: number }> = [];
-
-  if (currentSuffix < prefixLength && originalSuffix < prefixLength) {
-    return { modifiedLines, addedLines, deletedAnchors };
-  }
-
-  const originalChangedCount = Math.max(0, originalSuffix - prefixLength + 1);
-  const currentChangedCount = Math.max(0, currentSuffix - prefixLength + 1);
-  const overlapCount = Math.min(originalChangedCount, currentChangedCount);
-
-  for (let offset = 0; offset < overlapCount; offset += 1) {
-    modifiedLines.add(prefixLength + offset + 1);
-  }
-
-  if (currentChangedCount > overlapCount) {
-    for (let offset = overlapCount; offset < currentChangedCount; offset += 1) {
-      addedLines.add(prefixLength + offset + 1);
-    }
-  }
-
-  if (originalChangedCount > overlapCount) {
-    deletedAnchors.push({
-      line: Math.min(prefixLength + overlapCount + 1, currentLines.length + 1),
-      count: originalChangedCount - overlapCount,
-    });
-  }
-
-  return { modifiedLines, addedLines, deletedAnchors };
-}
-
-class ModifiedLineMarker extends GutterMarker {
-  toDOM() {
-    const marker = document.createElement("span");
-    marker.className = "cm-modified-line-marker";
-    return marker;
-  }
-}
-
-const modifiedLineMarker = new ModifiedLineMarker();
-
-class AddedLineMarker extends GutterMarker {
-  toDOM() {
-    const marker = document.createElement("span");
-    marker.className = "cm-added-line-marker";
-    return marker;
-  }
-}
-
-const addedLineMarker = new AddedLineMarker();
-
-class DeletedBlockWidget extends WidgetType {
-  constructor(private count: number) {
-    super();
-  }
-
-  toDOM() {
-    const wrapper = document.createElement("div");
-    wrapper.className = "cm-deleted-block-widget";
-    wrapper.textContent = `Deleted ${this.count} line${this.count > 1 ? "s" : ""}`;
-    return wrapper;
-  }
-}
-
-function computeLineChangeSetFromDiff(diff: FileDiff | null) {
-  const modifiedLines = new Set<number>();
-  const addedLines = new Set<number>();
-  const deletedAnchors: Array<{ line: number; count: number }> = [];
-
-  if (!diff) {
-    return { modifiedLines, addedLines, deletedAnchors };
-  }
-
-  for (const hunk of diff.hunks) {
-    let pendingDeletes = 0;
-    let pendingAdds = 0;
-    let pendingAnchor = hunk.new_start;
-
-    const flushPending = () => {
-      const overlap = Math.min(pendingDeletes, pendingAdds);
-      for (let offset = 0; offset < overlap; offset += 1) {
-        modifiedLines.add(pendingAnchor + offset);
-      }
-      for (let offset = overlap; offset < pendingAdds; offset += 1) {
-        addedLines.add(pendingAnchor + offset);
-      }
-      if (pendingDeletes > overlap) {
-        deletedAnchors.push({
-          line: pendingAnchor + overlap,
-          count: pendingDeletes - overlap,
-        });
-      }
-      pendingDeletes = 0;
-      pendingAdds = 0;
-    };
-
-    for (const line of hunk.lines) {
-      if (line.kind === "-") {
-        if (pendingDeletes === 0 && pendingAdds === 0) {
-          pendingAnchor = line.new_line ?? pendingAnchor;
-        }
-        pendingDeletes += 1;
-        continue;
-      }
-
-      if (line.kind === "+") {
-        if (pendingDeletes === 0 && pendingAdds === 0) {
-          pendingAnchor = line.new_line ?? pendingAnchor;
-        }
-        pendingAdds += 1;
-        continue;
-      }
-
-      flushPending();
-    }
-
-    flushPending();
-  }
-
-  return { modifiedLines, addedLines, deletedAnchors };
 }
 
 function App() {
@@ -256,7 +107,6 @@ function App() {
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
   const [selectedGitFilePath, setSelectedGitFilePath] = useState<string | null>(null);
   const [fileDiff, setFileDiff] = useState<FileDiff | null>(null);
-  const [activeEditorGitDiff, setActiveEditorGitDiff] = useState<FileDiff | null>(null);
   const [diffSourceTab, setDiffSourceTab] = useState<"diff" | "log">("diff");
   const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false);
   const [isGitRepo, setIsGitRepo] = useState(false);
@@ -318,92 +168,6 @@ function App() {
     () => openTabs.find((t) => t.path === activeTabPath) || null,
     [openTabs, activeTabPath]
   );
-
-  const emptyLineChangeSet = useMemo(
-    () => ({
-      modifiedLines: new Set<number>(),
-      addedLines: new Set<number>(),
-      deletedAnchors: [] as Array<{ line: number; count: number }>,
-    }),
-    []
-  );
-
-  const localLineChangeSet = useMemo(() => {
-    if (!activeTab || !activeTab.isDirty) return emptyLineChangeSet;
-    return computeLineChangeSet(activeTab.originalContent, activeTab.content);
-  }, [activeTab, emptyLineChangeSet]);
-
-  const gitLineChangeSet = useMemo(
-    () => computeLineChangeSetFromDiff(activeEditorGitDiff),
-    [activeEditorGitDiff]
-  );
-
-  const lineChangeSet = activeTab?.isDirty ? localLineChangeSet : gitLineChangeSet;
-
-  const modifiedLineExtensions = useMemo(() => {
-    if (
-      !activeTab ||
-      (
-        lineChangeSet.modifiedLines.size === 0 &&
-        lineChangeSet.addedLines.size === 0 &&
-        lineChangeSet.deletedAnchors.length === 0
-      )
-    ) {
-      return [];
-    }
-
-    const lineDecorations = EditorView.decorations.compute([], (state) => {
-      const builder = new RangeSetBuilder<Decoration>();
-      for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
-        if (!lineChangeSet.modifiedLines.has(lineNumber) && !lineChangeSet.addedLines.has(lineNumber)) continue;
-        const line = state.doc.line(lineNumber);
-        builder.add(
-          line.from,
-          line.from,
-          Decoration.line({
-            class: lineChangeSet.addedLines.has(lineNumber) ? "cm-line-added" : "cm-line-modified",
-          })
-        );
-      }
-
-      for (const anchor of lineChangeSet.deletedAnchors) {
-        const position =
-          anchor.line > state.doc.lines
-            ? state.doc.length
-            : state.doc.line(anchor.line).from;
-        builder.add(
-          position,
-          position,
-          Decoration.widget({
-            widget: new DeletedBlockWidget(anchor.count),
-            block: true,
-            side: -1,
-          })
-        );
-      }
-      return builder.finish();
-    });
-
-    const changedLineGutter = gutter({
-      class: "cm-modified-gutter",
-      markers: (view) => {
-        const builder = new RangeSetBuilder<GutterMarker>();
-        for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
-          if (!lineChangeSet.modifiedLines.has(lineNumber) && !lineChangeSet.addedLines.has(lineNumber)) continue;
-          const line = view.state.doc.line(lineNumber);
-          builder.add(
-            line.from,
-            line.from,
-            lineChangeSet.addedLines.has(lineNumber) ? addedLineMarker : modifiedLineMarker
-          );
-        }
-        return builder.finish();
-      },
-      initialSpacer: () => modifiedLineMarker,
-    });
-
-    return [changedLineGutter, lineDecorations];
-  }, [activeTab, lineChangeSet]);
 
   const gitStatusByPath = useMemo(() => {
     const statusMap: Record<string, string> = {};
@@ -597,10 +361,8 @@ function App() {
       const newTab: EditorDocument = {
         path,
         content: "",
-        originalContent: "",
         isDirty: false,
         isLoading: true,
-        isSaving: false,
       };
       setOpenTabs((prev) => (prev.some((t) => t.path === path) ? prev : [...prev, newTab]));
       setActiveTabPath(path);
@@ -611,9 +373,9 @@ function App() {
         setOpenTabs((prev) =>
           prev.some((t) => t.path === path)
             ? prev.map((t) =>
-                t.path === path ? { ...t, content, originalContent: content, isLoading: false } : t
+                t.path === path ? { ...t, content, isLoading: false } : t
               )
-            : [...prev, { ...newTab, content, originalContent: content, isLoading: false }]
+            : [...prev, { ...newTab, content, isLoading: false }]
         );
         updateRecentFiles(path);
         addToNavHistory(path, lineNumber);
@@ -647,92 +409,53 @@ function App() {
     setStagedFiles(staged);
   }, [projectRoot, isGitRepo]);
 
-  const refreshActiveEditorGitDiff = useCallback(async () => {
-    if (!projectRoot || !isGitRepo || !activeTabPath) {
-      setActiveEditorGitDiff(null);
-      return;
-    }
-    try {
-      const relativePath = toRelativePath(projectRoot, activeTabPath);
-      const diff = await getFileDiff(projectRoot, relativePath);
-      setActiveEditorGitDiff(diff);
-    } catch {
-      setActiveEditorGitDiff(null);
-    }
-  }, [projectRoot, isGitRepo, activeTabPath]);
-
   const handleSave = useCallback(async () => {
     const tab = openTabs.find((t) => t.path === activeTabPath);
-    if (!tab || !tab.isDirty || tab.isLoading || tab.isSaving) return;
-    const snapshotContent = tab.content;
-    setOpenTabs((prev) =>
-      prev.map((t) => (t.path === activeTabPath ? { ...t, isSaving: true } : t))
-    );
+    if (!tab || !tab.isDirty || tab.isLoading) return;
     setError(null);
     try {
-      await writeFile(tab.path, snapshotContent);
+      await writeFile(tab.path, tab.content);
       setOpenTabs((prev) =>
         prev.map((t) =>
           t.path === activeTabPath
-            ? {
-                ...t,
-                originalContent: snapshotContent,
-                isDirty: t.content !== snapshotContent,
-                isSaving: false,
-              }
+            ? { ...t, isDirty: false }
             : t
         )
       );
       void refreshGitWorkingTreeState();
-      void refreshActiveEditorGitDiff();
     } catch (e) {
       setError(String(e));
-      setOpenTabs((prev) =>
-        prev.map((t) => (t.path === activeTabPath ? { ...t, isSaving: false } : t))
-      );
     }
-  }, [openTabs, activeTabPath, refreshGitWorkingTreeState, refreshActiveEditorGitDiff]);
+  }, [openTabs, activeTabPath, refreshGitWorkingTreeState]);
 
   const handleSaveAll = useCallback(async () => {
-    const dirtyTabs = openTabs.filter((t) => t.isDirty && !t.isLoading && !t.isSaving);
+    const dirtyTabs = openTabs.filter((t) => t.isDirty && !t.isLoading);
     if (dirtyTabs.length === 0) return;
-
-    // Mark all dirty tabs as saving
-    setOpenTabs((prev) =>
-      prev.map((t) => (t.isDirty && !t.isLoading && !t.isSaving ? { ...t, isSaving: true } : t))
-    );
     setError(null);
 
-    // Save each tab independently, collecting errors
     const results = await Promise.allSettled(
       dirtyTabs.map(async (tab) => {
         try {
           await writeFile(tab.path, tab.content);
-          return { path: tab.path, content: tab.content, success: true, error: null };
+          return { path: tab.path, success: true, error: null };
         } catch (e) {
-          return { path: tab.path, content: tab.content, success: false, error: String(e) };
+          return { path: tab.path, success: false, error: String(e) };
         }
       })
     );
 
-    // Update tab states based on results (only for tabs that participated in save)
     const errors: string[] = [];
     const savedPaths = new Set(dirtyTabs.map((t) => t.path));
     setOpenTabs((prev) =>
       prev.map((t) => {
         if (!savedPaths.has(t.path)) return t;
         const result = results.find((r) => r.status === "fulfilled" && r.value.path === t.path);
-        if (!result) return { ...t, isSaving: false };
-        const { success, error, content } = (result as PromiseFulfilledResult<{ path: string; content: string; success: boolean; error: string | null }>).value;
+        if (!result) return t;
+        const { success, error } = (result as PromiseFulfilledResult<{ path: string; success: boolean; error: string | null }>).value;
         if (!success && error) {
           errors.push(`${t.path}: ${error}`);
         }
-        return {
-          ...t,
-          originalContent: success ? content : t.originalContent,
-          isDirty: success ? t.content !== content : t.isDirty,
-          isSaving: false,
-        };
+        return { ...t, isDirty: success ? false : t.isDirty };
       })
     );
 
@@ -740,64 +463,7 @@ function App() {
       setError(`Save all failed for some files:\n${errors.join("\n")}`);
     }
     void refreshGitWorkingTreeState();
-    void refreshActiveEditorGitDiff();
-  }, [openTabs, refreshGitWorkingTreeState, refreshActiveEditorGitDiff]);
-
-  useEffect(() => {
-    const dirtyTabs = openTabs.filter((t) => t.isDirty && !t.isLoading && !t.isSaving);
-    if (dirtyTabs.length === 0) return;
-
-    const timeoutId = window.setTimeout(() => {
-      const snapshotTabs = dirtyTabs.map((tab) => ({ path: tab.path, content: tab.content }));
-      const snapshotPaths = new Set(snapshotTabs.map((tab) => tab.path));
-
-      setOpenTabs((prev) =>
-        prev.map((tab) =>
-          snapshotPaths.has(tab.path) ? { ...tab, isSaving: true } : tab
-        )
-      );
-
-      void Promise.allSettled(
-        snapshotTabs.map(async (tab) => {
-          try {
-            await writeFile(tab.path, tab.content);
-            return { path: tab.path, content: tab.content, success: true, error: null };
-          } catch (e) {
-            return { path: tab.path, content: tab.content, success: false, error: String(e) };
-          }
-        })
-      ).then((results) => {
-        const errors: string[] = [];
-        setOpenTabs((prev) =>
-          prev.map((tab) => {
-            if (!snapshotPaths.has(tab.path)) return tab;
-            const result = results.find(
-              (item) => item.status === "fulfilled" && item.value.path === tab.path
-            );
-            if (!result || result.status !== "fulfilled") return { ...tab, isSaving: false };
-            const { success, error, content } = result.value;
-            if (!success && error) {
-              errors.push(`${tab.path}: ${error}`);
-            }
-            return {
-              ...tab,
-              originalContent: success ? content : tab.originalContent,
-              isDirty: success ? tab.content !== content : tab.isDirty,
-              isSaving: false,
-            };
-          })
-        );
-
-        if (errors.length > 0) {
-          setError(`Auto-save failed for some files:\n${errors.join("\n")}`);
-        }
-        void refreshGitWorkingTreeState();
-        void refreshActiveEditorGitDiff();
-      });
-    }, 900);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [openTabs, refreshGitWorkingTreeState, refreshActiveEditorGitDiff]);
+  }, [openTabs, refreshGitWorkingTreeState]);
 
   const handleSwitchTab = useCallback((path: string) => {
     setActiveTabPath(path);
@@ -1007,10 +673,6 @@ function App() {
         .catch(() => setFileBlame(null));
     }
   }, [bottomPanelTab, projectRoot, isGitRepo, activeTab]);
-
-  useEffect(() => {
-    void refreshActiveEditorGitDiff();
-  }, [refreshActiveEditorGitDiff, gitChanges, stagedFiles]);
 
   // Git stage/unstage handlers
   const handleStageFile = useCallback(async (filePath: string) => {
@@ -2041,8 +1703,8 @@ function App() {
                 value={activeTab.content}
                 height="100%"
                 theme={dracula}
-                extensions={[...langFromPath(activeTab.path), ...modifiedLineExtensions]}
-                editable={!activeTab.isLoading && !activeTab.isSaving}
+                extensions={langFromPath(activeTab.path)}
+                editable={!activeTab.isLoading}
                 onChange={(value) =>
                   setOpenTabs((prev) =>
                     prev.map((t) =>
