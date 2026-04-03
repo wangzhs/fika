@@ -8,9 +8,12 @@ body, html, #root {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 13px;
-  color: #bbbbbb;
+  color: #c5ccd4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .app {
@@ -41,15 +44,17 @@ body, html, #root {
 }
 
 .logo {
-  font-weight: 650;
-  color: #f3f4f6;
-  font-size: 13px;
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  color: #eef2f6;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .project-name {
-  color: #aeb4bc;
+  color: #b9c0c8;
   font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -84,14 +89,15 @@ body, html, #root {
   height: 28px;
   border: 1px solid rgba(255, 255, 255, 0.07);
   background: rgba(255, 255, 255, 0.04);
-  color: #c8cdd5;
+  color: #d7dde5;
   border-radius: 8px;
   padding: 0 10px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
   cursor: pointer;
 }
 
@@ -161,10 +167,10 @@ body, html, #root {
   align-items: center;
   padding: 0 12px;
   font-size: 11px;
-  font-weight: 600;
-  color: #e0e0e0;
+  font-weight: 700;
+  color: #d5dbe3;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.08em;
 }
 
 .panel-content {
@@ -190,6 +196,7 @@ body, html, #root {
   cursor: pointer;
   white-space: nowrap;
   font-size: 13px;
+  line-height: 1.35;
   border-radius: 3px;
   margin: 0 4px;
 }
@@ -230,6 +237,8 @@ body, html, #root {
 .tree-label {
   overflow: hidden;
   text-overflow: ellipsis;
+  color: #d1d7df;
+  font-weight: 480;
 }
 
 .tree-git-status {
@@ -237,7 +246,7 @@ body, html, #root {
   font-family: "JetBrains Mono", monospace;
   font-size: 10px;
   font-weight: 700;
-  opacity: 0.85;
+  opacity: 0.92;
 }
 
 .tree-empty {
@@ -264,8 +273,8 @@ body, html, #root {
   align-items: center;
   gap: 10px;
   padding: 0 16px;
-  font-size: 12px;
-  color: #9ca3af;
+  font-size: 11.5px;
+  color: #8f98a3;
 }
 
 .breadcrumb-path {
@@ -273,6 +282,8 @@ body, html, #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #c2c9d1;
+  font-weight: 500;
 }
 
 .editor-status-badge {
@@ -282,9 +293,10 @@ body, html, #root {
   height: 20px;
   padding: 0 8px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .editor-status-badge.dirty {
@@ -318,6 +330,32 @@ body, html, #root {
 
 .code-editor .cm-content {
   padding-bottom: 48px;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.68;
+  color: #d8dee6;
+  font-variant-ligatures: contextual;
+}
+
+.code-editor .cm-gutters {
+  background: #1b1d21;
+  color: #66707c;
+  border-right: 1px solid #23262b;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", Consolas, monospace;
+  font-size: 12px;
+}
+
+.code-editor .cm-activeLine {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.code-editor .cm-activeLineGutter {
+  background: rgba(255, 255, 255, 0.02);
+  color: #8e98a5;
+}
+
+.code-editor .cm-cursor {
+  border-left-color: #82aaff;
 }
 
 .code-editor .cm-line-modified {
@@ -371,7 +409,7 @@ body, html, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #808080;
+  color: #8f98a3;
   font-size: 14px;
   padding: 32px;
 }
@@ -395,16 +433,17 @@ body, html, #root {
 }
 
 .welcome-title {
-  font-size: 24px;
+  font-size: 23px;
   line-height: 1.15;
-  font-weight: 650;
+  font-weight: 620;
   color: #f4f6f8;
 }
 
 .welcome-subtitle {
   margin-top: 10px;
-  font-size: 13px;
-  color: #9ca3af;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #9aa3ae;
 }
 
 .welcome-actions {
@@ -475,14 +514,14 @@ body, html, #root {
 }
 
 .welcome-recent-name {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 620;
   color: #eceff3;
 }
 
 .welcome-recent-path {
-  font-size: 12px;
-  color: #8f98a3;
+  font-size: 11.5px;
+  color: #88919b;
 }
 
 .empty-state-card {
@@ -495,15 +534,16 @@ body, html, #root {
 }
 
 .empty-state-title {
-  font-size: 20px;
-  font-weight: 650;
+  font-size: 19px;
+  font-weight: 620;
   color: #eef1f4;
 }
 
 .empty-state-subtitle {
   margin-top: 10px;
-  color: #9aa3ad;
-  line-height: 1.5;
+  color: #959eaa;
+  line-height: 1.6;
+  font-size: 12.5px;
 }
 
 .error-text {
@@ -940,9 +980,9 @@ body, html, #root {
 }
 
 .search-result-path {
-  color: #e0e0e0;
+  color: #dce2e8;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -954,13 +994,14 @@ body, html, #root {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   color: #dce8f5;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 10px;
+  font-weight: 700;
   letter-spacing: 0.01em;
+  text-transform: uppercase;
 }
 
 .search-result-content {
-  color: #a0a0a0;
+  color: #94a0ac;
   font-size: 12px;
   font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
   white-space: nowrap;
@@ -985,7 +1026,7 @@ body, html, #root {
   border-radius: 999px;
   padding: 4px 10px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   color: #bfe3c8;
   -webkit-app-region: no-drag;
 }
@@ -999,7 +1040,7 @@ body, html, #root {
 }
 
 .branch-name {
-  font-weight: 500;
+  font-weight: 650;
 }
 
 .tab-bar {
@@ -1018,7 +1059,7 @@ body, html, #root {
   gap: 8px;
   padding: 8px 12px;
   cursor: pointer;
-  color: #9ba1aa;
+  color: #96a0ac;
   white-space: nowrap;
   border-radius: 8px 8px 0 0;
   border: 1px solid transparent;
@@ -1036,11 +1077,12 @@ body, html, #root {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  line-height: 1.1;
+  line-height: 1.2;
 }
 
 .tab-item-name {
   font-size: 13px;
+  font-weight: 540;
   max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1086,7 +1128,7 @@ body, html, #root {
   gap: 12px;
   padding: 6px 16px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11.5px;
   border-bottom: 1px solid #2a2a2a;
 }
 
@@ -1117,8 +1159,9 @@ body, html, #root {
 .file-status.status-\? { color: #808080; }
 
 .file-path {
-  color: #d4d4d4;
+  color: #d8dee6;
   font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  font-size: 12px;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1158,9 +1201,9 @@ body, html, #root {
 }
 
 .diff-file-path {
-  color: #e0e0e0;
+  color: #dde3ea;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .diff-hunk {
