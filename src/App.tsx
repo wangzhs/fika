@@ -94,7 +94,7 @@ function App() {
   const globalInputRef = useRef<HTMLInputElement>(null);
 
   // Bottom panel tab state
-  const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("search");
+  const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("diff");
 
   // Git state
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
@@ -245,7 +245,6 @@ function App() {
       const results = await searchInProject(projectRoot, globalSearchQuery);
       setGlobalSearchResults(results);
       setGlobalSelectedIndex(0);
-      setBottomPanelTab("search");
     } catch (e) {
       setError(String(e));
       setGlobalSearchResults([]);
@@ -1656,12 +1655,6 @@ function App() {
       <footer className="bottom-panel">
         <div className="panel-header tabs">
           <button
-            className={bottomPanelTab === "search" ? "active" : ""}
-            onClick={() => setBottomPanelTab("search")}
-          >
-            Search
-          </button>
-          <button
             className={bottomPanelTab === "diff" ? "active" : ""}
             onClick={() => setBottomPanelTab("diff")}
           >
@@ -1681,31 +1674,6 @@ function App() {
           </button>
         </div>
         <div className="panel-content-area">
-          {bottomPanelTab === "search" && (
-            <div className="search-results-panel">
-              {globalSearchLoading ? (
-                <div className="search-loading">Searching...</div>
-              ) : globalSearchResults.length > 0 ? (
-                globalSearchResults.map((result) => (
-                  <div
-                    key={`${result.path}:${result.line_number}`}
-                    className="search-result-row"
-                    onClick={() => handleOpenFile(result.path, result.line_number)}
-                  >
-                    <span className="search-result-file">{toRelativePath(projectRoot, result.path)}</span>
-                    <span className="search-result-line">:{result.line_number}</span>
-                    <span className="search-result-text">{result.matched_fragment}</span>
-                  </div>
-                ))
-              ) : (
-                <div className="search-empty">
-                  {globalSearchQuery
-                    ? "No results found"
-                    : `Use ${shortcutLabel("F", { shift: true })} to search in project`}
-                </div>
-              )}
-            </div>
-          )}
           {bottomPanelTab === "diff" && (
             <div className="git-panel">
               {!isGitRepo ? (

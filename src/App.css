@@ -750,54 +750,6 @@ body, html, #root {
   background: #1e1e1e;
 }
 
-.search-results-panel {
-  padding: 8px 0;
-  overflow: auto;
-  max-height: 100%;
-}
-
-.search-result-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  cursor: pointer;
-  font-size: 12px;
-  border-bottom: 1px solid #2a2a2a;
-}
-
-.search-result-row:hover {
-  background: #2a2d2e;
-}
-
-.search-result-file {
-  color: #e0e0e0;
-  font-weight: 500;
-  min-width: 200px;
-}
-
-.search-result-line {
-  color: #858585;
-  min-width: 50px;
-}
-
-.search-result-text {
-  color: #a0a0a0;
-  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.search-loading,
-.search-empty {
-  padding: 40px;
-  text-align: center;
-  color: #808080;
-  font-size: 13px;
-}
-
 /* Git UI Styles */
 .branch-badge {
   display: inline-flex;

@@ -25,7 +25,7 @@ export interface SearchResult {
   matched_fragment: string;
 }
 
-export type BottomPanelTab = "search" | "diff" | "log" | "blame";
+export type BottomPanelTab = "diff" | "log" | "blame";
 
 // Git types
 export interface Branch {
