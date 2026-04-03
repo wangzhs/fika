@@ -1965,13 +1965,22 @@ function App() {
           )}
           <div className="code-editor">
             {activeTab ? (
+              activeTab.isLoading ? (
+                <div className="code-placeholder">
+                  <div className="empty-state-card">
+                    <div className="empty-state-title">Loading file…</div>
+                    <div className="empty-state-subtitle">{activeTab.path}</div>
+                  </div>
+                </div>
+              ) : (
               <CodeMirror
+                key={activeTab.path}
                 ref={editorRef}
                 value={activeTab.content}
                 height="100%"
                 theme={dracula}
                 extensions={[editorKeybindings, ...langFromPath(activeTab.path), ...modifiedLineExtensions]}
-                editable={!activeTab.isLoading}
+                editable
                 onChange={(value) =>
                   setOpenTabs((prev) =>
                     prev.map((t) =>
@@ -1988,6 +1997,7 @@ function App() {
                   foldGutter: false,
                 }}
               />
+              )
             ) : projectRoot && tree ? (
               <div className="code-placeholder">
                 <div className="empty-state-card">
