@@ -218,9 +218,25 @@ body, html, #root {
   flex-shrink: 0;
 }
 
+.tree-bullet.git-status-M { background: #cca700; }
+.tree-bullet.git-status-A { background: #7ee787; }
+.tree-bullet.git-status-D { background: #ffa198; }
+.tree-bullet.git-status-R { background: #79c0ff; }
+.tree-bullet.git-status-C { background: #d2a8ff; }
+.tree-bullet.git-status-U { background: #ff7b72; }
+.tree-bullet.git-status-\? { background: #8b949e; }
+
 .tree-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.tree-git-status {
+  margin-left: auto;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.85;
 }
 
 .tree-empty {

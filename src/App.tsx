@@ -166,6 +166,18 @@ function App() {
     [openTabs, activeTabPath]
   );
 
+  const gitStatusByPath = useMemo(() => {
+    const statusMap: Record<string, string> = {};
+    if (!projectRoot) return statusMap;
+    for (const file of gitChanges) {
+      statusMap[`${projectRoot}/${file.path}`] = file.status;
+    }
+    for (const file of stagedFiles) {
+      statusMap[`${projectRoot}/${file.path}`] = file.status;
+    }
+    return statusMap;
+  }, [gitChanges, stagedFiles, projectRoot]);
+
   // In-file search state - current match index tracking (-1 means no selection yet)
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
 
@@ -571,10 +583,15 @@ function App() {
     }
   }, [projectRoot]);
 
-  const handleShowFileDiff = useCallback(async (filePath: string) => {
+  const handleShowFileDiff = useCallback(async (filePath: string, options?: { staged?: boolean; commit?: string | null }) => {
     if (!projectRoot) return;
     try {
-      const diff = await getFileDiff(projectRoot, filePath);
+      const diff = await getFileDiff(
+        projectRoot,
+        filePath,
+        options?.staged,
+        options?.commit ?? undefined
+      );
       setBottomPanelTab("diff");
       setSelectedDiffFile(filePath);
       setSelectedGitFilePath(filePath);
@@ -592,8 +609,13 @@ function App() {
 
   const handleCompareSelectedGitFile = useCallback(() => {
     if (!selectedGitFilePath || !isGitRepo) return;
-    void handleShowFileDiff(selectedGitFilePath);
-  }, [selectedGitFilePath, isGitRepo, handleShowFileDiff]);
+    const selectedIsStaged = stagedFiles.some((file) => file.path === selectedGitFilePath);
+    const commitForDiff = bottomPanelTab === "log" && selectedCommit ? selectedCommit : undefined;
+    void handleShowFileDiff(selectedGitFilePath, {
+      staged: bottomPanelTab === "diff" ? selectedIsStaged : undefined,
+      commit: commitForDiff,
+    });
+  }, [selectedGitFilePath, isGitRepo, handleShowFileDiff, stagedFiles, bottomPanelTab, selectedCommit]);
 
   // Refresh git data when project changes or when switching to git tabs
   useEffect(() => {
@@ -609,6 +631,11 @@ function App() {
       ]).then(([changes, staged]) => {
         setGitChanges(changes);
         setStagedFiles(staged);
+        const availablePaths = new Set([...staged.map((file) => file.path), ...changes.map((file) => file.path)]);
+        setSelectedGitFilePath((current) => {
+          if (current && availablePaths.has(current)) return current;
+          return staged[0]?.path ?? changes[0]?.path ?? null;
+        });
       });
     }
   }, [bottomPanelTab, projectRoot, isGitRepo]);
@@ -1538,12 +1565,12 @@ function App() {
             <span>Project</span>
             <button
               className="icon-btn"
-                title="Refresh"
-                onClick={handleRefreshTree}
-                style={{ marginLeft: 'auto', fontSize: '12px' }}
-              >
-                ↻
-              </button>
+              title="Refresh"
+              onClick={handleRefreshTree}
+              style={{ marginLeft: 'auto', fontSize: '12px' }}
+            >
+              ↻
+            </button>
           </div>
           <div
             className="panel-content"
@@ -1562,6 +1589,7 @@ function App() {
                   openFolders={openFolders}
                   toggleFolder={toggleFolder}
                   selectedFile={activeTabPath}
+                  gitStatusByPath={gitStatusByPath}
                   onSelectFile={handleOpenFile}
                   onContextMenu={(path, isDir, e) => {
                     e.stopPropagation();
@@ -1835,7 +1863,7 @@ function App() {
                             key={file.path}
                             className={`changed-file-item ${selectedGitFilePath === file.path ? "selected" : ""}`}
                             onClick={() => setSelectedGitFilePath(file.path)}
-                            onDoubleClick={() => void handleShowFileDiff(file.path)}
+                            onDoubleClick={() => void handleShowFileDiff(file.path, { staged: true })}
                           >
                             <span className={`file-status status-${file.status}`}>{file.status}</span>
                             <span className="file-path">{file.path}</span>

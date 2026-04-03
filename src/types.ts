@@ -5,6 +5,8 @@ export interface FileNode {
   children?: FileNode[];
 }
 
+export type GitFileStatus = string | null;
+
 export interface FolderResult {
   root: string;
   tree: FileNode;

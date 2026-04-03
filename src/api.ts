@@ -38,8 +38,8 @@ export function getWorkingTreeChanges(path: string) {
   return invoke<ChangedFile[]>("get_working_tree_changes", { path });
 }
 
-export function getFileDiff(path: string, file: string, staged?: boolean) {
-  return invoke<FileDiff>("get_file_diff", { path, file, staged });
+export function getFileDiff(path: string, file: string, staged?: boolean, commit?: string) {
+  return invoke<FileDiff>("get_file_diff", { path, file, staged, commit });
 }
 
 export function getCommitFiles(path: string, commit: string) {

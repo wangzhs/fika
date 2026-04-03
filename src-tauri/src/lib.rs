@@ -495,18 +495,23 @@ async fn get_working_tree_changes(path: String) -> Result<Vec<ChangedFile>, Stri
 }
 
 #[tauri::command]
-async fn get_file_diff(path: String, file: String, staged: Option<bool>) -> Result<FileDiff, String> {
+async fn get_file_diff(path: String, file: String, staged: Option<bool>, commit: Option<String>) -> Result<FileDiff, String> {
     if !is_git_repo(&path) {
         return Err("Not a git repository".to_string());
     }
 
-    let mut args = vec!["diff"];
-    if staged.unwrap_or(false) {
-        args.push("--staged");
-    }
-    args.push(&file);
-
-    let output = run_git_command(&args, &path)?;
+    let owned_commit = commit.unwrap_or_default();
+    let output = if !owned_commit.is_empty() {
+        run_git_command(&["show", &owned_commit, "--", &file], &path)?
+    } else {
+        let mut args = vec!["diff"];
+        if staged.unwrap_or(false) {
+            args.push("--staged");
+        }
+        args.push("--");
+        args.push(&file);
+        run_git_command(&args, &path)?
+    };
     Ok(parse_diff_output(&output, &file))
 }
 
