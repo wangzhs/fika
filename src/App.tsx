@@ -106,6 +106,7 @@ function App() {
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
   const [selectedGitFilePath, setSelectedGitFilePath] = useState<string | null>(null);
   const [fileDiff, setFileDiff] = useState<FileDiff | null>(null);
+  const [diffSourceTab, setDiffSourceTab] = useState<"diff" | "log">("diff");
   const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false);
   const [isGitRepo, setIsGitRepo] = useState(false);
 
@@ -586,12 +587,14 @@ function App() {
   const handleShowFileDiff = useCallback(async (filePath: string, options?: { staged?: boolean; commit?: string | null }) => {
     if (!projectRoot) return;
     try {
+      const sourceTab = options?.commit ? "log" : "diff";
       const diff = await getFileDiff(
         projectRoot,
         filePath,
         options?.staged,
         options?.commit ?? undefined
       );
+      setDiffSourceTab(sourceTab);
       setBottomPanelTab("diff");
       setSelectedDiffFile(filePath);
       setSelectedGitFilePath(filePath);
@@ -606,6 +609,12 @@ function App() {
     setSelectedCommit(null);
     setCommitFiles(null);
   }, []);
+
+  const handleCloseDiffView = useCallback(() => {
+    setSelectedDiffFile(null);
+    setFileDiff(null);
+    setBottomPanelTab(diffSourceTab);
+  }, [diffSourceTab]);
 
   const handleCompareSelectedGitFile = useCallback(() => {
     if (!selectedGitFilePath || !isGitRepo) return;
@@ -1162,6 +1171,7 @@ function App() {
     selectedGitFilePath,
     isGitRepo,
     handleCompareSelectedGitFile,
+    handleCloseDiffView,
   ]);
 
   useEffect(() => {
@@ -1798,12 +1808,9 @@ function App() {
                   <div className="diff-header">
                     <button
                       className="back-btn"
-                      onClick={() => {
-                        setSelectedDiffFile(null);
-                        setFileDiff(null);
-                      }}
+                      onClick={handleCloseDiffView}
                     >
-                      ← Back to changes
+                      ← Back to {diffSourceTab === "log" ? "history" : "changes"}
                     </button>
                     <span className="diff-file-path">{fileDiff.path}</span>
                   </div>
