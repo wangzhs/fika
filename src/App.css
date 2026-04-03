@@ -252,12 +252,11 @@ body, html, #root {
 .code-placeholder {
   height: 100%;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
   color: #808080;
   font-size: 14px;
+  padding: 32px;
 }
 
 .code-placeholder kbd {
@@ -267,6 +266,106 @@ body, html, #root {
   font-family: inherit;
   font-size: 12px;
   color: #ccc;
+}
+
+.welcome-card {
+  width: min(640px, 100%);
+  padding: 32px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(43, 46, 51, 0.92) 0%, rgba(31, 34, 39, 0.96) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.welcome-title {
+  font-size: 24px;
+  line-height: 1.15;
+  font-weight: 650;
+  color: #f4f6f8;
+}
+
+.welcome-subtitle {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.welcome-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.welcome-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e5e7eb;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.welcome-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.welcome-btn-primary {
+  background: #3a6ea5;
+  border-color: #3a6ea5;
+  color: #ffffff;
+}
+
+.welcome-btn-primary:hover {
+  background: #467db7;
+}
+
+.welcome-btn-shortcut {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  color: #cfd6dd;
+  font-size: 11px;
+}
+
+.welcome-recent-list {
+  margin-top: 24px;
+  display: grid;
+  gap: 8px;
+}
+
+.welcome-recent-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.welcome-recent-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.welcome-recent-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #eceff3;
+}
+
+.welcome-recent-path {
+  font-size: 12px;
+  color: #8f98a3;
 }
 
 .error-text {

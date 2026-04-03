@@ -1467,33 +1467,6 @@ function App() {
               <span className="toolbar-btn-icon">→</span>
             </button>
           </div>
-          <div className="toolbar-group">
-            <button
-              className="icon-btn toolbar-btn toolbar-btn-text"
-              title={`Recent Projects (${shortcutLabel("O", { shift: true })})`}
-              onClick={() => setRecentProjectsOpen(true)}
-            >
-              <span className="toolbar-btn-label">Recent</span>
-            </button>
-            <button
-              className="icon-btn toolbar-btn toolbar-btn-text"
-              title={`Open Folder (${shortcutLabel("O")})`}
-              onClick={handleOpenFolder}
-            >
-              <span className="toolbar-btn-label">Open</span>
-            </button>
-            <button
-              className="icon-btn toolbar-btn toolbar-btn-text"
-              title={`Find File (${shortcutLabel("N", { shift: true })})`}
-              onClick={() => {
-                if (!tree) return;
-                setFinderOpen(true);
-                setTimeout(() => inputRef.current?.focus(), 0);
-              }}
-            >
-              <span className="toolbar-btn-label">Files</span>
-            </button>
-          </div>
         </div>
       </header>
 
@@ -1533,11 +1506,7 @@ function App() {
                     setContextMenu({ x: e.clientX, y: e.clientY, path, isDir });
                   }}
                 />
-              ) : (
-                <li className="tree-empty" onClick={handleOpenFolder}>
-                  Click to open a folder
-                </li>
-              )}
+              ) : null}
             </ul>
           </div>
           {/* Context Menu */}
@@ -1648,10 +1617,42 @@ function App() {
               />
             ) : (
               <div className="code-placeholder">
-                <div>
-                  Press <kbd>{shortcutLabel("O")}</kbd> to open a folder
+                <div className="welcome-card">
+                  <div className="welcome-title">Open a project</div>
+                  <div className="welcome-subtitle">
+                    Start with a folder or reopen a recent workspace.
+                  </div>
+                  <div className="welcome-actions">
+                    <button
+                      className="welcome-btn welcome-btn-primary"
+                      onClick={handleOpenFolder}
+                    >
+                      Open Folder
+                      <span className="welcome-btn-shortcut">{shortcutLabel("O")}</span>
+                    </button>
+                    <button
+                      className="welcome-btn"
+                      onClick={() => setRecentProjectsOpen(true)}
+                    >
+                      Recent Projects
+                      <span className="welcome-btn-shortcut">{shortcutLabel("O", { shift: true })}</span>
+                    </button>
+                  </div>
+                  {!!recentProjects.length && (
+                    <div className="welcome-recent-list">
+                      {recentProjects.slice(0, 6).map((project) => (
+                        <button
+                          key={project.path}
+                          className="welcome-recent-item"
+                          onClick={() => handleOpenFolderWithSession(project.path)}
+                        >
+                          <span className="welcome-recent-name">{project.name}</span>
+                          <span className="welcome-recent-path">{project.path}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                {!error && <div>Select a file to view its contents</div>}
               </div>
             )}
           </div>
