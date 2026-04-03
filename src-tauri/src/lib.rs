@@ -390,6 +390,49 @@ fn run_git_command(args: &[&str], cwd: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+fn run_git_command_bytes(args: &[&str], cwd: &str) -> Result<Vec<u8>, String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("Failed to run git command: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Git command failed: {}", stderr));
+    }
+
+    Ok(output.stdout)
+}
+
+fn git_code_to_status(code: char) -> Option<String> {
+    match code {
+        'M' => Some("M".to_string()),
+        'A' => Some("A".to_string()),
+        'D' => Some("D".to_string()),
+        'R' => Some("R".to_string()),
+        'C' => Some("C".to_string()),
+        'U' => Some("U".to_string()),
+        '?' => Some("?".to_string()),
+        _ => None,
+    }
+}
+
+fn parse_porcelain_z_entry(entry: &str) -> Option<(char, char, String, bool)> {
+    if entry.len() < 4 {
+        return None;
+    }
+
+    let mut chars = entry.chars();
+    let index_status = chars.next()?;
+    let worktree_status = chars.next()?;
+    let _space = chars.next()?;
+    let path = chars.as_str().to_string();
+    let expects_rename_target = matches!(index_status, 'R' | 'C');
+
+    Some((index_status, worktree_status, path, expects_rename_target))
+}
+
 fn is_git_repo(path: &str) -> bool {
     run_git_command(&["rev-parse", "--git-dir"], path).is_ok()
 }
@@ -482,32 +525,38 @@ async fn get_working_tree_changes(path: String) -> Result<Vec<ChangedFile>, Stri
         return Ok(vec![]);
     }
 
-    let output = run_git_command(&["status", "--porcelain"], &path)?;
+    let output = run_git_command_bytes(&["status", "--porcelain=v1", "-z"], &path)?;
     let mut files = Vec::new();
+    let text = String::from_utf8_lossy(&output);
+    let mut entries = text.split('\0').filter(|entry| !entry.is_empty());
 
-    for line in output.lines() {
-        if line.len() < 3 {
+    while let Some(entry) = entries.next() {
+        let Some((index_status, worktree_status, file_path, expects_rename_target)) =
+            parse_porcelain_z_entry(entry)
+        else {
             continue;
-        }
-
-        let status_code = &line[0..2];
-        let file_path = &line[3..];
-
-        let status = match status_code.trim() {
-            "M" => "M",
-            "A" => "A",
-            "D" => "D",
-            "R" => "R",
-            "C" => "C",
-            "U" => "U",
-            "??" => "?",
-            _ => "M",
         };
 
-        files.push(ChangedFile {
-            path: file_path.to_string(),
-            status: status.to_string(),
-        });
+        let final_path = if expects_rename_target {
+            entries.next().unwrap_or(&file_path).to_string()
+        } else {
+            file_path
+        };
+
+        let status = if index_status == '?' && worktree_status == '?' {
+            git_code_to_status('?')
+        } else if worktree_status != ' ' {
+            git_code_to_status(worktree_status)
+        } else {
+            None
+        };
+
+        if let Some(status) = status {
+            files.push(ChangedFile {
+                path: final_path,
+                status,
+            });
+        }
     }
 
     Ok(files)
@@ -806,30 +855,32 @@ async fn get_staged_files(path: String) -> Result<Vec<StagedFile>, String> {
         return Ok(vec![]);
     }
 
-    let output = run_git_command(&["diff", "--cached", "--name-status"], &path)?;
+    let output = run_git_command_bytes(&["diff", "--cached", "--name-status", "-z"], &path)?;
     let mut files = Vec::new();
+    let text = String::from_utf8_lossy(&output);
+    let mut entries = text.split('\0').filter(|entry| !entry.is_empty());
 
-    for line in output.lines() {
-        if line.len() < 3 {
+    while let Some(entry) = entries.next() {
+        if entry.len() < 2 {
             continue;
         }
 
-        let status_code = &line[0..1];
-        let file_path = &line[2..];
-
-        let status = match status_code {
-            "M" => "M",
-            "A" => "A",
-            "D" => "D",
-            "R" => "R",
-            "C" => "C",
-            _ => "M",
+        let mut chars = entry.chars();
+        let status_code = chars.next().unwrap_or('M');
+        let _tab = chars.next();
+        let file_path = chars.as_str().to_string();
+        let final_path = if matches!(status_code, 'R' | 'C') {
+            entries.next().unwrap_or(&file_path).to_string()
+        } else {
+            file_path
         };
 
-        files.push(StagedFile {
-            path: file_path.to_string(),
-            status: status.to_string(),
-        });
+        if let Some(status) = git_code_to_status(status_code) {
+            files.push(StagedFile {
+                path: final_path,
+                status,
+            });
+        }
     }
 
     Ok(files)

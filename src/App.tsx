@@ -579,6 +579,14 @@ function App() {
     ]);
     setGitChanges(changes);
     setStagedFiles(staged);
+    setSelectedGitFilePath((current) => {
+      const availablePaths = new Set([
+        ...staged.map((file) => file.path),
+        ...changes.map((file) => file.path),
+      ]);
+      if (current && availablePaths.has(current)) return current;
+      return staged[0]?.path ?? changes[0]?.path ?? null;
+    });
   }, [projectRoot, isGitRepo]);
 
   const handleSave = useCallback(async () => {
@@ -594,7 +602,7 @@ function App() {
             : t
         )
       );
-      void refreshGitWorkingTreeState();
+      await refreshGitWorkingTreeState();
     } catch (e) {
       setError(String(e));
     }
@@ -634,7 +642,7 @@ function App() {
     if (errors.length > 0) {
       setError(`Save all failed for some files:\n${errors.join("\n")}`);
     }
-    void refreshGitWorkingTreeState();
+    await refreshGitWorkingTreeState();
   }, [openTabs, refreshGitWorkingTreeState]);
 
   const handleSwitchTab = useCallback((path: string) => {
@@ -674,7 +682,7 @@ function App() {
           setActiveTabPath(next.path);
         }
       }
-      void refreshGitWorkingTreeState();
+      await refreshGitWorkingTreeState();
     },
     [openTabs, activeTabPath, getEditorContent, refreshGitWorkingTreeState]
   );
@@ -727,10 +735,11 @@ function App() {
     }
 
     // Fetch other git data independently - failures in one don't affect others
-    const [branchesResult, historyResult, changesResult] = await Promise.allSettled([
+    const [branchesResult, historyResult, changesResult, stagedResult] = await Promise.allSettled([
       getBranches(projectRoot),
       getGitHistory(projectRoot, 50),
       getWorkingTreeChanges(projectRoot),
+      getStagedFiles(projectRoot),
     ]);
 
     if (branchesResult.status === 'fulfilled') {
@@ -751,6 +760,12 @@ function App() {
       setGitChanges(changesResult.value);
     } else {
       setGitChanges([]);
+    }
+
+    if (stagedResult.status === 'fulfilled') {
+      setStagedFiles(stagedResult.value);
+    } else {
+      setStagedFiles([]);
     }
 
     setIsGitRepo(isRepo);
