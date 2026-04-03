@@ -571,13 +571,24 @@ function App() {
   }, [updateRecentFiles]);
 
   const handleCloseTab = useCallback(
-    (path: string) => {
+    async (path: string) => {
       const tab = openTabs.find((t) => t.path === path);
       if (!tab) return;
-      if (hasUnsavedChangesForPath(path)) {
-        const ok = confirm("Unsaved changes will be lost. Close tab?");
-        if (!ok) return;
+
+      const currentContent =
+        path === activeTabPath ? (getEditorContent() ?? tab.content) : tab.content;
+      const hasUnsavedChanges = currentContent !== tab.originalContent;
+
+      if (hasUnsavedChanges) {
+        setError(null);
+        try {
+          await writeFile(path, currentContent);
+        } catch (e) {
+          setError(`Failed to save before closing: ${String(e)}`);
+          return;
+        }
       }
+
       const idx = openTabs.findIndex((t) => t.path === path);
       const nextTabs = openTabs.filter((t) => t.path !== path);
       setOpenTabs(nextTabs);
@@ -591,8 +602,9 @@ function App() {
           setActiveTabPath(next.path);
         }
       }
+      void refreshGitWorkingTreeState();
     },
-    [openTabs, activeTabPath, hasUnsavedChangesForPath]
+    [openTabs, activeTabPath, getEditorContent, refreshGitWorkingTreeState]
   );
 
   const editorKeybindings = useMemo(
