@@ -45,7 +45,24 @@ function toRelativePath(root: string | null, absolutePath: string) {
   return absolutePath;
 }
 
+function isMacPlatform() {
+  if (typeof navigator === "undefined") return false;
+  return /Mac|iPhone|iPad/i.test(navigator.platform);
+}
+
 function App() {
+  const isMac = useMemo(() => isMacPlatform(), []);
+  const shortcutLabel = useCallback((key: string, options?: { shift?: boolean; alt?: boolean }) => {
+    if (isMac) {
+      return `${options?.shift ? "⇧" : ""}${options?.alt ? "⌥" : ""}⌘${key}`;
+    }
+    const parts = ["Ctrl"];
+    if (options?.shift) parts.push("Shift");
+    if (options?.alt) parts.push("Alt");
+    parts.push(key);
+    return parts.join("+");
+  }, [isMac]);
+
   const [rootName, setRootName] = useState<string | null>(null);
   const [projectRoot, setProjectRoot] = useState<string | null>(null);
   const [tree, setTree] = useState<FileNode | null>(null);
@@ -867,6 +884,8 @@ function App() {
         (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "s";
       const isSave =
         (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "s";
+      const isCloseTab =
+        (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "w";
       const isRecentFiles =
         (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e";
       const isRecentProjects =
@@ -994,6 +1013,13 @@ function App() {
         return;
       }
 
+      if (isCloseTab) {
+        if (!activeTabPath) return;
+        e.preventDefault();
+        handleCloseTab(activeTabPath);
+        return;
+      }
+
       if (isFindFile) {
         e.preventDefault();
         if (!tree) return;
@@ -1067,6 +1093,7 @@ function App() {
     handleOpenFolder,
     handleSave,
     handleSaveAll,
+    handleCloseTab,
     handleOpenFile,
     goToNextMatch,
     goToPrevMatch,
@@ -1082,7 +1109,7 @@ function App() {
             <input
               ref={inputRef}
               className="finder-input"
-              placeholder="Find file (Ctrl+Shift+N)"
+              placeholder={`Find file (${shortcutLabel("N", { shift: true })})`}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -1097,7 +1124,7 @@ function App() {
                     setFinderOpen(false);
                   }}
                 >
-                  <span className="finder-icon">📝</span>
+                  <span className="finder-icon finder-icon-file" />
                   <span className="finder-path">
                     {toRelativePath(projectRoot, p)}
                   </span>
@@ -1129,7 +1156,7 @@ function App() {
                     setRecentOpen(false);
                   }}
                 >
-                  <span className="finder-icon">📝</span>
+                  <span className="finder-icon finder-icon-file" />
                   <span className="finder-path">
                     {toRelativePath(projectRoot, p)}
                   </span>
@@ -1193,7 +1220,7 @@ function App() {
             <input
               ref={globalInputRef}
               className="finder-input"
-              placeholder="Search in project... (Ctrl+Shift+F)"
+              placeholder={`Search in project... (${shortcutLabel("F", { shift: true })})`}
               value={globalSearchQuery}
               onChange={(e) => setGlobalSearchQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -1260,7 +1287,7 @@ function App() {
                     className={`finder-item ${branch.is_current ? "active" : ""}`}
                     onClick={() => handleSwitchBranch(branch.name)}
                   >
-                    <span className="finder-icon">{branch.is_current ? "●" : "○"}</span>
+                    <span className={`finder-icon ${branch.is_current ? "finder-icon-branch-active" : "finder-icon-branch"}`} />
                     <span className="finder-path">{branch.name}</span>
                   </div>
                 ))
@@ -1287,7 +1314,7 @@ function App() {
                     key={project.path}
                     className="finder-item"
                   >
-                    <span className="finder-icon">📁</span>
+                    <span className="finder-icon finder-icon-project" />
                     <span
                       className="finder-path"
                       style={{ flex: 1, cursor: 'pointer' }}
@@ -1412,7 +1439,7 @@ function App() {
             onClick={() => setBranchSwitcherOpen(true)}
             title="Switch branch"
           >
-            <span className="branch-icon">🌿</span>
+            <span className="branch-icon">⎇</span>
             <span className="branch-name">{currentBranch}</span>
           </button>
         )}
@@ -1420,7 +1447,7 @@ function App() {
         {/* Navigation buttons */}
         <button
           className="icon-btn"
-          title="Back (Ctrl+Left)"
+          title={`Back (${shortcutLabel(isMac ? "←" : "Left")})`}
           onClick={goBack}
           disabled={navIndex <= 0}
         >
@@ -1428,7 +1455,7 @@ function App() {
         </button>
         <button
           className="icon-btn"
-          title="Forward (Ctrl+Right)"
+          title={`Forward (${shortcutLabel(isMac ? "→" : "Right")})`}
           onClick={goForward}
           disabled={navIndex >= navHistory.length - 1}
         >
@@ -1437,28 +1464,28 @@ function App() {
         {/* Recent Projects button */}
         <button
           className="icon-btn"
-          title="Recent Projects (Ctrl+Shift+O)"
+          title={`Recent Projects (${shortcutLabel("O", { shift: true })})`}
           onClick={() => setRecentProjectsOpen(true)}
         >
-          📚
+          Recent
         </button>
         <button
           className="icon-btn"
-          title="Open Folder (Ctrl+O)"
+          title={`Open Folder (${shortcutLabel("O")})`}
           onClick={handleOpenFolder}
         >
-          📂
+          Open
         </button>
         <button
           className="icon-btn"
-          title="Find File (Ctrl+Shift+N)"
+          title={`Find File (${shortcutLabel("N", { shift: true })})`}
           onClick={() => {
             if (!tree) return;
             setFinderOpen(true);
             setTimeout(() => inputRef.current?.focus(), 0);
           }}
         >
-          🔍
+          Files
         </button>
         <div className="window-controls">
           <button>─</button>
@@ -1473,12 +1500,12 @@ function App() {
             <span>Project</span>
             <button
               className="icon-btn"
-              title="Refresh"
-              onClick={handleRefreshTree}
-              style={{ marginLeft: 'auto', fontSize: '12px' }}
-            >
-              🔄
-            </button>
+                title="Refresh"
+                onClick={handleRefreshTree}
+                style={{ marginLeft: 'auto', fontSize: '12px' }}
+              >
+                ↻
+              </button>
           </div>
           <div
             className="panel-content"
@@ -1618,7 +1645,7 @@ function App() {
             ) : (
               <div className="code-placeholder">
                 <div>
-                  Press <kbd>Ctrl+O</kbd> to open a folder
+                  Press <kbd>{shortcutLabel("O")}</kbd> to open a folder
                 </div>
                 {!error && <div>Select a file to view its contents</div>}
               </div>
@@ -1675,7 +1702,7 @@ function App() {
                 <div className="search-empty">
                   {globalSearchQuery
                     ? "No results found"
-                    : "Use Ctrl+Shift+F to search in project"}
+                    : `Use ${shortcutLabel("F", { shift: true })} to search in project`}
                 </div>
               )}
             </div>

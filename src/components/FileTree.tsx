@@ -27,7 +27,7 @@ export function FileTree({
         onClick={() => onSelectFile(node.path)}
         onContextMenu={(e) => onContextMenu?.(node.path, false, e)}
       >
-        <span className="tree-icon file">📝</span>
+        <span className="tree-bullet" />
         <span className="tree-label">{node.name}</span>
       </li>
     );
@@ -43,7 +43,6 @@ export function FileTree({
         onContextMenu={(e) => onContextMenu?.(node.path, true, e)}
       >
         <span className="tree-chevron">{isOpen ? "▼" : "▶"}</span>
-        <span className="tree-icon folder">{isOpen ? "📂" : "📁"}</span>
         <span className="tree-label">{node.name}</span>
       </li>
       {isOpen &&

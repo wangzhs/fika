@@ -60,8 +60,10 @@ body, html, #root {
   border: none;
   color: #bbbbbb;
   cursor: pointer;
-  font-size: 14px;
-  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  padding: 4px 10px;
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -166,14 +168,12 @@ body, html, #root {
   text-align: center;
 }
 
-.tree-icon {
-  font-size: 13px;
-  display: inline-flex;
-  align-items: center;
-}
-
-.tree-icon.folder {
-  color: #dcb67a;
+.tree-bullet {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #6f7680;
+  flex-shrink: 0;
 }
 
 .tree-label {
@@ -397,8 +397,39 @@ body, html, #root {
 }
 
 .finder-icon {
-  font-size: 14px;
-  opacity: 0.8;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  border: 1px solid #5a5a5a;
+  opacity: 0.9;
+}
+
+.finder-icon-file {
+  background: linear-gradient(180deg, #444 0%, #343434 100%);
+}
+
+.finder-icon-project {
+  border-radius: 2px;
+  background: linear-gradient(180deg, #525252 0%, #3b3b3b 100%);
+}
+
+.finder-icon-branch,
+.finder-icon-branch-active {
+  border-radius: 50%;
+  border: none;
+  width: 8px;
+  height: 8px;
+  margin-left: 3px;
+  margin-right: 3px;
+}
+
+.finder-icon-branch {
+  background: #6b7280;
+}
+
+.finder-icon-branch-active {
+  background: #4fa46d;
 }
 
 .finder-path {
