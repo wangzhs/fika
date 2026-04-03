@@ -1073,6 +1073,8 @@ function App() {
         (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "s";
       const isCloseTab =
         (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "w";
+      const isQuitApp =
+        (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "q";
       const isRecentFiles =
         (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e";
       const isRecentProjects =
@@ -1208,6 +1210,16 @@ function App() {
         return;
       }
 
+      if (isQuitApp) {
+        e.preventDefault();
+        if (hasDirtyTabs) {
+          const shouldClose = window.confirm("You have unsaved changes. Close anyway?");
+          if (!shouldClose) return;
+        }
+        void getCurrentWindow().close();
+        return;
+      }
+
       if (isCloseTab) {
         e.preventDefault();
         if (!activeTabPath) return;
@@ -1295,6 +1307,7 @@ function App() {
     handleOpenFolder,
     handleSave,
     handleSaveAll,
+    hasDirtyTabs,
     handleCloseTab,
     handleOpenFile,
     goToNextMatch,
