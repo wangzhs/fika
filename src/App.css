@@ -344,6 +344,37 @@ body, html, #root {
   background: #1f2124;
 }
 
+.image-preview {
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 28px;
+  background:
+    linear-gradient(45deg, #23262b 25%, transparent 25%),
+    linear-gradient(-45deg, #23262b 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #23262b 75%),
+    linear-gradient(-45deg, transparent 75%, #23262b 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+}
+
+.image-preview-error {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.image-preview-content {
+  display: block;
+  max-width: min(100%, 1200px);
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
+  background: #ffffff;
+}
+
 .markdown-preview-inner {
   max-width: 920px;
   margin: 0 auto;

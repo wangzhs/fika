@@ -22,6 +22,7 @@ import {
 import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
 import { collectFilePaths } from "./utils/tree";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emitTo } from "@tauri-apps/api/event";
@@ -123,6 +124,10 @@ function isMacPlatform() {
   return /Mac|iPhone|iPad/i.test(navigator.platform);
 }
 
+function isImagePath(path: string) {
+  return /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(path);
+}
+
 declare global {
   interface Window {
     __FIKA_CLOSE_ACTIVE_TAB__?: () => void;
@@ -137,6 +142,7 @@ declare global {
 function App() {
   const isMac = useMemo(() => isMacPlatform(), []);
   const [markdownPreviewOpen, setMarkdownPreviewOpen] = useState(false);
+  const [imagePreviewError, setImagePreviewError] = useState<string | null>(null);
   const shortcutLabel = useCallback((key: string, options?: { shift?: boolean; alt?: boolean }) => {
     if (isMac) {
       return `${options?.shift ? "⇧" : ""}${options?.alt ? "⌥" : ""}⌘${key}`;
@@ -262,9 +268,17 @@ function App() {
     () => openTabs.find((t) => t.path === activeTabPath) || null,
     [openTabs, activeTabPath]
   );
+  const isImageTab = useMemo(
+    () => !!activeTab?.path && isImagePath(activeTab.path),
+    [activeTab]
+  );
   const isMarkdownTab = useMemo(
     () => !!activeTab?.path && /\.(md|markdown)$/i.test(activeTab.path),
     [activeTab]
+  );
+  const activeImageSrc = useMemo(
+    () => (isImageTab && activeTab ? convertFileSrc(activeTab.path) : null),
+    [activeTab, isImageTab]
   );
   const getEditorContent = useCallback(
     () => editorRef.current?.view?.state.doc.toString() ?? null,
@@ -424,6 +438,10 @@ function App() {
 
   useEffect(() => {
     setMarkdownPreviewOpen(false);
+  }, [activeTabPath]);
+
+  useEffect(() => {
+    setImagePreviewError(null);
   }, [activeTabPath]);
 
   const updateRecentFiles = useCallback((path: string) => {
@@ -664,6 +682,22 @@ function App() {
       }
       if (pendingOpenPathsRef.current.has(path)) {
         setActiveTabPath(path);
+        return;
+      }
+      if (isImagePath(path)) {
+        const imageTab: EditorDocument = {
+          path,
+          content: "",
+          originalContent: "",
+          isDirty: false,
+          isLoading: false,
+        };
+        setOpenTabs((prev) => (prev.some((t) => t.path === path) ? prev : [...prev, imageTab]));
+        setActiveTabPath(path);
+        setSelectedTreePath(path);
+        updateRecentFiles(path);
+        addToNavHistory(path, lineNumber);
+        setError(null);
         return;
       }
       pendingOpenPathsRef.current.add(path);
@@ -2424,7 +2458,25 @@ function App() {
                   </div>
                 </div>
               ) : (
-              markdownPreviewOpen && isMarkdownTab ? (
+              isImageTab && activeImageSrc ? (
+                <div className="image-preview">
+                  {imagePreviewError ? (
+                    <div className="image-preview-error">
+                      <div className="empty-state-card">
+                        <div className="empty-state-title">Image preview failed</div>
+                        <div className="empty-state-subtitle">{imagePreviewError}</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <img
+                      className="image-preview-content"
+                      src={activeImageSrc}
+                      alt={activeTab.path}
+                      onError={() => setImagePreviewError(activeImageSrc)}
+                    />
+                  )}
+                </div>
+              ) : markdownPreviewOpen && isMarkdownTab ? (
                 <div className="markdown-preview">
                   <div className="markdown-preview-inner">
                     <ReactMarkdown
