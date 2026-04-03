@@ -52,6 +52,42 @@ function isMacPlatform() {
   return /Mac|iPhone|iPad/i.test(navigator.platform);
 }
 
+function computeModifiedLineNumbers(originalContent: string, currentContent: string) {
+  const originalLines = originalContent.split("\n");
+  const currentLines = currentContent.split("\n");
+
+  let prefixLength = 0;
+  const maxPrefix = Math.min(originalLines.length, currentLines.length);
+  while (
+    prefixLength < maxPrefix &&
+    originalLines[prefixLength] === currentLines[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let originalSuffix = originalLines.length - 1;
+  let currentSuffix = currentLines.length - 1;
+  while (
+    originalSuffix >= prefixLength &&
+    currentSuffix >= prefixLength &&
+    originalLines[originalSuffix] === currentLines[currentSuffix]
+  ) {
+    originalSuffix -= 1;
+    currentSuffix -= 1;
+  }
+
+  const modifiedLines = new Set<number>();
+  if (currentSuffix < prefixLength) {
+    return modifiedLines;
+  }
+
+  for (let lineNumber = prefixLength + 1; lineNumber <= currentSuffix + 1; lineNumber += 1) {
+    modifiedLines.add(lineNumber);
+  }
+
+  return modifiedLines;
+}
+
 class ModifiedLineMarker extends GutterMarker {
   toDOM() {
     const marker = document.createElement("span");
@@ -183,18 +219,7 @@ function App() {
 
   const modifiedLineNumbers = useMemo(() => {
     if (!activeTab || !activeTab.isDirty) return new Set<number>();
-    const originalLines = activeTab.originalContent.split("\n");
-    const currentLines = activeTab.content.split("\n");
-    const maxLineCount = Math.max(originalLines.length, currentLines.length);
-    const modifiedLines = new Set<number>();
-
-    for (let index = 0; index < maxLineCount; index += 1) {
-      if (originalLines[index] !== currentLines[index]) {
-        modifiedLines.add(index + 1);
-      }
-    }
-
-    return modifiedLines;
+    return computeModifiedLineNumbers(activeTab.originalContent, activeTab.content);
   }, [activeTab]);
 
   const modifiedLineExtensions = useMemo(() => {
