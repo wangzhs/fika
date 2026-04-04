@@ -1,56 +1,146 @@
 # Fika
 
-A lightweight, cross-platform code browser for developers who love IntelliJ IDEA's shortcuts and interface but don't want the heaviness.
+[简体中文](./README.zh-CN.md)
 
-## Philosophy
+Fika is a lightweight desktop code editor for developers who want a dense, keyboard-first workflow without the surface area of a full IDE.
 
-- **Read and navigate code**, not run it.
-- **Keyboard-first** with IntelliJ IDEA keybindings.
-- **Instant** — open any folder in milliseconds.
-- **Minimal** — no build system, no debugger, no plugin bloat.
+It focuses on the core loop:
 
-## Target User
+- open a project fast
+- browse and edit files
+- search and jump quickly
+- review Git history and diffs
 
-You write code in the terminal or with AI CLI tools. You want a fast, focused desktop app just for:
-- Browsing project files
-- Searching and jumping to files/symbols
-- Reading code with syntax highlighting
-- Reviewing Git changes (diff, log, blame)
+## What Fika is
 
-## Core Requirements
+- A desktop editor for reading and editing local codebases
+- A focused workspace for search, navigation, and Git review
+- A good fit for terminal-first and AI-assisted development workflows
 
-### 1. File & Project Navigation (IDEA-style)
-- [ ] `Ctrl+Shift+N` / `Cmd+Shift+N` — Find file by name
-- [ ] `Ctrl+N` / `Cmd+N` — Find class/symbol
-- [ ] `Ctrl+O` / `Cmd+O` — Open folder from system dialog
-- [ ] Project tool window on the left with collapsible file tree
-- [ ] Breadcrumb navigation above editor
-- [ ] File tree remembers expand/collapse state
+## What Fika is not
 
-### 2. Code Viewer
-- [ ] Syntax highlighting for common languages
-- [ ] Line numbers
-- [ ] Read-only by default (this is a browser, not an editor)
-- [ ] Darcula-like dark theme as default
-- [ ] Clean, dense IDE layout with thin separators
-
-### 3. Git Integration
-- [ ] Diff viewer with side-by-side or unified diff
-- [ ] Commit log / history
-- [ ] Blame annotations
-- [ ] Stage/unstage and simple commit actions (optional for v1)
-
-### 4. Performance & Platform
-- [ ] macOS and Windows support
-- [ ] Open 10k+ file projects without choking
-- [ ] Skip `node_modules`, `.git`, hidden folders automatically
-
-### 5. Explicitly Out of Scope (for now)
-- No run / debug / build integration
-- No LSP-based autocomplete or refactoring
+- No run / debug / build orchestration
+- No full LSP refactoring suite
 - No plugin marketplace
-- No complex project setup wizard
+- No heavy project setup flow
+
+## Current Features
+
+### Project and files
+
+- Open folders from the system dialog
+- Open projects in a new window
+- Recent projects
+- Project tree with folder expand/collapse state
+- Drag files or folders into the app to open them
+- Multi-tab editing
+- Save current file / save all
+- Unsaved state handling on tab close and app quit
+
+### Navigation and search
+
+- Find file
+- Recent files
+- In-file search
+- Project-wide text search
+- Back / forward navigation history
+- Breadcrumbs
+
+### Editor and preview
+
+- Syntax highlighting for common languages
+- Markdown preview
+- Image preview
+- Dense dark UI tuned for desktop use
+
+### Git
+
+- Current branch display
+- Branch switching
+- Working tree changes
+- File diff
+- History for repository, folder, or file
+- Blame
+- Stage / unstage
+- Commit
+- Revert a single file to the Git version
+
+### Distribution
+
+- macOS and Windows bundles
+- In-app update flow
+- GitHub Release based updater pipeline
+
+## Keyboard Shortcuts
+
+- `Cmd/Ctrl + O` open folder
+- `Cmd/Ctrl + W` close current tab
+- `Cmd/Ctrl + S` save current file
+- `Cmd/Ctrl + Shift + S` save all
+- `Cmd/Ctrl + Shift + N` find file
+- `Cmd/Ctrl + E` recent files
+- `Cmd/Ctrl + F` find in current file
+- `Cmd/Ctrl + Shift + F` search in project
+- `Cmd + Shift + P` toggle Markdown preview on Markdown files
+- `Cmd/Ctrl + D` compare the selected Git item in Git views
+
+## Screenshots
+
+Add screenshots here once the UI settles.
+
+## Development
+
+### Prerequisites
+
+- Node.js 20.19+ recommended
+- Rust toolchain
+- Tauri prerequisites for your platform
+
+### Run locally
+
+```bash
+npm install
+npm run tauri dev
+```
+
+### Build
+
+```bash
+npm run build
+cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+### Bundle
+
+```bash
+npm run bundle:mac
+npm run bundle:windows
+```
+
+There is also a local helper script:
+
+```bash
+./scripts/package.sh mac
+./scripts/package.sh windows
+```
+
+## Updates and Releases
+
+Updater and release notes are documented in:
+
+- [UPDATER.md](./UPDATER.md)
+
+Local-only release helpers are intentionally kept out of the repository history.
+
+## Roadmap
+
+Fika is still being actively refined. The current focus is:
+
+- polish the editing workflow
+- tighten macOS and Windows desktop behavior
+- improve release and updater reliability
+- keep the UI fast and focused
 
 ## License
 
-MIT (planned open source)
+MIT
