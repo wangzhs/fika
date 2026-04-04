@@ -5,8 +5,10 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
-    AppHandle, Emitter, Manager, RunEvent, WindowEvent,
+    AppHandle, Manager, RunEvent, WindowEvent,
 };
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_updater::UpdaterExt;
 
@@ -150,6 +152,7 @@ const MENU_OPEN_FOLDER: &str = "file_open_folder";
 const MENU_OPEN_RECENT: &str = "file_open_recent";
 const MENU_OPEN_FOLDER_NEW_WINDOW: &str = "file_open_folder_new_window";
 const MENU_CLOSE_TAB: &str = "file_close_tab";
+const MENU_CHECK_FOR_UPDATES: &str = "help_check_for_updates";
 
 #[tauri::command]
 async fn open_folder(handle: tauri::AppHandle) -> Result<Option<FolderResult>, String> {
@@ -1319,7 +1322,18 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
         ],
     )?;
 
-    let help_menu = Submenu::with_items(app, "Help", true, &[])?;
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[&MenuItem::with_id(
+            app,
+            MENU_CHECK_FOR_UPDATES,
+            "Check for Updates…",
+            true,
+            None::<&str>,
+        )?],
+    )?;
 
     Menu::with_items(
         app,
@@ -1375,6 +1389,9 @@ pub fn run() {
                 eval_in_focused_window(app, "window.__FIKA_OPEN_FOLDER_NEW_WINDOW__?.()")
             }
             MENU_CLOSE_TAB => eval_in_focused_window(app, "window.__FIKA_CLOSE_ACTIVE_TAB__?.()"),
+            MENU_CHECK_FOR_UPDATES => {
+                eval_in_focused_window(app, "window.__FIKA_CHECK_FOR_UPDATES__?.()")
+            }
             _ => {}
         })
         .on_window_event(|window, event| {

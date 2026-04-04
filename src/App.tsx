@@ -136,6 +136,7 @@ declare global {
     __FIKA_OPEN_FOLDER__?: () => void;
     __FIKA_SHOW_RECENT_PROJECTS__?: () => void;
     __FIKA_OPEN_FOLDER_NEW_WINDOW__?: () => void;
+    __FIKA_CHECK_FOR_UPDATES__?: () => void;
     __FIKA_CLEAR_PROJECT__?: () => void;
     __FIKA_SESSION_RESTORED__?: boolean;
   }
@@ -1184,6 +1185,16 @@ function App() {
       setIsInstallingUpdate(false);
     }
   }, []);
+
+  useEffect(() => {
+    window.__FIKA_CHECK_FOR_UPDATES__ = () => {
+      void handleOpenUpdateModal();
+    };
+
+    return () => {
+      delete window.__FIKA_CHECK_FOR_UPDATES__;
+    };
+  }, [handleOpenUpdateModal]);
 
   const handleCloseDiffView = useCallback(() => {
     setSelectedDiffFile(null);
@@ -2392,14 +2403,6 @@ function App() {
         </div>
         <div className="spacer" />
         <div className="titlebar-actions">
-          <button
-            className="titlebar-action"
-            onClick={() => void handleOpenUpdateModal()}
-            title="Check for updates"
-          >
-            <span className="titlebar-action-icon">⇪</span>
-            <span>Update</span>
-          </button>
           {isGitRepo && (
             <button
               className="titlebar-action"
