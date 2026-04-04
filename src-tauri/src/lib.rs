@@ -8,6 +8,7 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent, WindowEvent,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri_plugin_updater::UpdaterExt;
 
 #[derive(Default)]
 struct CloseGuard {
@@ -135,6 +136,14 @@ struct OpenTarget {
     kind: String,
     root: String,
     file_path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AvailableUpdate {
+    current_version: String,
+    version: String,
+    date: Option<String>,
+    body: Option<String>,
 }
 
 const MENU_OPEN_FOLDER: &str = "file_open_folder";
@@ -1161,6 +1170,73 @@ async fn get_open_target(path: String) -> Result<OpenTarget, String> {
     })
 }
 
+fn build_runtime_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    let endpoint = option_env!("FIKA_UPDATER_ENDPOINT")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            "Updater is not configured. Set FIKA_UPDATER_ENDPOINT at build time.".to_string()
+        })?;
+    let pubkey = option_env!("FIKA_UPDATER_PUBKEY")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            "Updater is not configured. Set FIKA_UPDATER_PUBKEY at build time.".to_string()
+        })?;
+
+    let endpoint = endpoint
+        .parse()
+        .map_err(|e| format!("Invalid updater endpoint: {}", e))?;
+
+    app.updater_builder()
+        .pubkey(pubkey)
+        .endpoints(vec![endpoint])
+        .map_err(|e| format!("Failed to configure updater endpoints: {}", e))?
+        .build()
+        .map_err(|e| format!("Failed to build updater: {}", e))
+}
+
+#[tauri::command]
+async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<AvailableUpdate>, String> {
+    let updater = build_runtime_updater(&app)?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("Failed to check for updates: {}", e))?;
+
+    Ok(update.map(|update| AvailableUpdate {
+        current_version: update.current_version,
+        version: update.version,
+        date: update.date.map(|date| date.to_string()),
+        body: update.body,
+    }))
+}
+
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<Option<AvailableUpdate>, String> {
+    let updater = build_runtime_updater(&app)?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("Failed to check for updates: {}", e))?;
+
+    let Some(update) = update else {
+        return Ok(None);
+    };
+
+    let metadata = AvailableUpdate {
+        current_version: update.current_version.clone(),
+        version: update.version.clone(),
+        date: update.date.map(|date| date.to_string()),
+        body: update.body.clone(),
+    };
+
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("Failed to install update: {}", e))?;
+
+    Ok(Some(metadata))
+}
+
 fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let pkg_info = app.package_info();
     let config = app.config();
@@ -1291,7 +1367,9 @@ pub fn run() {
         .manage(AppLifecycle::default())
         .menu(|app| build_app_menu(app))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .on_menu_event(|app, event| match event.id().as_ref() {
             MENU_OPEN_FOLDER => eval_in_focused_window(app, "window.__FIKA_OPEN_FOLDER__?.()"),
             MENU_OPEN_RECENT => {
@@ -1357,7 +1435,8 @@ pub fn run() {
             get_git_history, get_working_tree_changes, get_file_diff, get_commit_files,
             get_file_blame, stage_file, unstage_file, discard_file_changes, commit, get_staged_files,
             create_file, create_directory, rename_path, delete_path, refresh_tree,
-            save_recent_projects, load_recent_projects, save_session, load_session, get_open_target
+            save_recent_projects, load_recent_projects, save_session, load_session, get_open_target,
+            check_for_updates, install_update
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

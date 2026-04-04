@@ -9,15 +9,17 @@ import { markdown } from "@codemirror/lang-markdown";
 import { css } from "@codemirror/lang-css";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { relaunch } from "@tauri-apps/plugin-process";
 import "./App.css";
-import type { Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab, FileBlame, StagedFile, RecentProject, NavigationEntry } from "./types";
+import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab, FileBlame, StagedFile, RecentProject, NavigationEntry } from "./types";
 import {
   openFolder, readFile, writeFile, searchInProject,
   getCurrentBranch, getBranches, switchBranch,
   getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles,
   getFileBlame, stageFile, unstageFile, discardFileChanges, commit, getStagedFiles,
   createFile, createDirectory, renamePath, deletePath, refreshTree,
-  saveRecentProjects, loadRecentProjects, saveSession, loadSession, setUnsavedChangesFlag, getOpenTarget
+  saveRecentProjects, loadRecentProjects, saveSession, loadSession, setUnsavedChangesFlag, getOpenTarget,
+  checkForUpdates, installUpdate
 } from "./api";
 import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
@@ -223,6 +225,11 @@ function App() {
   const [renameModal, setRenameModal] = useState<{ path: string; isDir: boolean; newName: string } | null>(null);
   const [newFileModal, setNewFileModal] = useState<{ dirPath: string; name: string; isDir: boolean } | null>(null);
   const [discardFileModalPath, setDiscardFileModalPath] = useState<string | null>(null);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
+  const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false);
+  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(null);
 
   // Navigation history state
   const [navHistory, setNavHistory] = useState<NavigationEntry[]>([]);
@@ -1138,6 +1145,45 @@ function App() {
     setSelectedCommit(null);
     setCommitFiles(null);
   }, [activeTab, projectRoot, selectedTreePath, toProjectRelativePath]);
+
+  const handleOpenUpdateModal = useCallback(async () => {
+    setUpdateModalOpen(true);
+    setAvailableUpdate(null);
+    setUpdateStatusMessage(null);
+    setIsCheckingForUpdates(true);
+    try {
+      const update = await checkForUpdates();
+      if (update) {
+        setAvailableUpdate(update);
+      } else {
+        setUpdateStatusMessage("You’re already on the latest version.");
+      }
+    } catch (e) {
+      setUpdateStatusMessage(String(e));
+    } finally {
+      setIsCheckingForUpdates(false);
+    }
+  }, []);
+
+  const handleInstallUpdate = useCallback(async () => {
+    setIsInstallingUpdate(true);
+    setUpdateStatusMessage(null);
+    try {
+      const installedUpdate = await installUpdate();
+      if (!installedUpdate) {
+        setAvailableUpdate(null);
+        setUpdateStatusMessage("You’re already on the latest version.");
+        return;
+      }
+      setAvailableUpdate(installedUpdate);
+      setUpdateStatusMessage(`Updated to ${installedUpdate.version}. Restarting…`);
+      await relaunch();
+    } catch (e) {
+      setUpdateStatusMessage(String(e));
+    } finally {
+      setIsInstallingUpdate(false);
+    }
+  }, []);
 
   const handleCloseDiffView = useCallback(() => {
     setSelectedDiffFile(null);
@@ -2268,6 +2314,63 @@ function App() {
         </div>
       )}
 
+      {updateModalOpen && (
+        <div className="finder-overlay" onClick={() => !isInstallingUpdate && setUpdateModalOpen(false)}>
+          <div className="finder-modal update-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="finder-header">Check for Updates</div>
+            <div className="discard-modal-body">
+              {isCheckingForUpdates ? (
+                <>
+                  <div className="discard-modal-title">Checking for updates…</div>
+                  <div className="discard-modal-note">Fika is looking for a newer release.</div>
+                </>
+              ) : availableUpdate ? (
+                <>
+                  <div className="discard-modal-title">Version {availableUpdate.version} is available</div>
+                  <div className="update-meta-row">
+                    <span>Current {availableUpdate.current_version}</span>
+                    {availableUpdate.date ? <span>Published {availableUpdate.date}</span> : null}
+                  </div>
+                  {availableUpdate.body ? (
+                    <pre className="update-release-notes">{availableUpdate.body}</pre>
+                  ) : (
+                    <div className="discard-modal-note">No release notes were provided for this version.</div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="discard-modal-title">No update available</div>
+                  <div className="discard-modal-note">
+                    {updateStatusMessage ?? "You’re already on the latest version."}
+                  </div>
+                </>
+              )}
+              {updateStatusMessage && availableUpdate && (
+                <div className="discard-modal-note update-status-note">{updateStatusMessage}</div>
+              )}
+            </div>
+            <div className="finder-actions">
+              <button
+                className="search-btn"
+                onClick={() => setUpdateModalOpen(false)}
+                disabled={isInstallingUpdate}
+              >
+                Close
+              </button>
+              {availableUpdate && (
+                <button
+                  className="search-btn"
+                  onClick={() => void handleInstallUpdate()}
+                  disabled={isInstallingUpdate}
+                >
+                  {isInstallingUpdate ? "Installing…" : `Install ${availableUpdate.version}`}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="titlebar">
         <div className="titlebar-leading">
           <span className="logo">Fika</span>
@@ -2288,8 +2391,16 @@ function App() {
           </div>
         </div>
         <div className="spacer" />
-        {isGitRepo && (
-          <div className="titlebar-actions">
+        <div className="titlebar-actions">
+          <button
+            className="titlebar-action"
+            onClick={() => void handleOpenUpdateModal()}
+            title="Check for updates"
+          >
+            <span className="titlebar-action-icon">⇪</span>
+            <span>Update</span>
+          </button>
+          {isGitRepo && (
             <button
               className="titlebar-action"
               onClick={handleOpenGitHistory}
@@ -2298,8 +2409,8 @@ function App() {
               <span className="titlebar-action-icon">◷</span>
               <span>Git</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </header>
 
       <div className="main">

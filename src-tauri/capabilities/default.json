@@ -8,6 +8,7 @@
     "core:webview:allow-create-webview-window",
     "core:window:allow-create",
     "opener:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "process:allow-restart"
   ]
 }

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Branch, ChangedFile, Commit, CommitFiles, FileDiff, FolderResult, SearchResult, FileBlame, StagedFile, RecentProject, SessionState, FileNode } from "./types";
+import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FolderResult, SearchResult, FileBlame, StagedFile, RecentProject, SessionState, FileNode } from "./types";
 
 export function openFolder() {
   return invoke<FolderResult | null>("open_folder");
@@ -120,4 +120,12 @@ export function loadSession() {
 
 export function getOpenTarget(path: string) {
   return invoke<{ kind: "file" | "directory"; root: string; file_path: string | null }>("get_open_target", { path });
+}
+
+export function checkForUpdates() {
+  return invoke<AvailableUpdate | null>("check_for_updates");
+}
+
+export function installUpdate() {
+  return invoke<AvailableUpdate | null>("install_update");
 }

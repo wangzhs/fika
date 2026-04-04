@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "fika",
-        "width": 1440,
-        "height": 900,
+        "width": 1280,
+        "height": 820,
         "minWidth": 1100,
         "minHeight": 720
       }
@@ -32,6 +32,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "fileAssociations": [
       {
         "name": "Code and Text Files",

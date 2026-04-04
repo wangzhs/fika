@@ -1113,6 +1113,10 @@ body, html, #root {
   width: 520px;
 }
 
+.update-modal {
+  width: 620px;
+}
+
 .discard-modal-body {
   padding: 18px 18px 6px;
 }
@@ -1141,6 +1145,35 @@ body, html, #root {
   color: #98a2ad;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.update-meta-row {
+  margin-top: 12px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: #b7c0cb;
+  font-size: 12px;
+}
+
+.update-release-notes {
+  margin-top: 12px;
+  padding: 12px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #1f2124;
+  border: 1px solid #31353a;
+  color: #cfd6de;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+}
+
+.update-status-note {
+  margin-top: 14px;
 }
 
 .finder-actions {

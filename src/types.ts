@@ -114,3 +114,10 @@ export interface NavigationEntry {
   path: string;
   line?: number;
 }
+
+export interface AvailableUpdate {
+  current_version: string;
+  version: string;
+  date?: string | null;
+  body?: string | null;
+}
