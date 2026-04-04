@@ -15,13 +15,20 @@ Keep the private key local or in CI only. You will get:
 
 ## 2. Local build env
 
-Set these before `npm run bundle:mac` or `npm run bundle:windows`:
+For local builds, the repo script can use `./.tauri/fika.key` automatically.
+
+If you want to use the generated key in this repo:
+
+```bash
+mkdir -p .tauri
+cp ~/.tauri/fika.key ./.tauri/fika.key
+```
+
+Set these before `npm run bundle:mac` or `npm run bundle:windows` only if you are not using `TAURI_SIGNING_PRIVATE_KEY_PATH`:
 
 ```bash
 export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/fika.key)"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
-export FIKA_UPDATER_PUBKEY="paste-the-public-key-here"
-export FIKA_UPDATER_ENDPOINT="https://github.com/<owner>/<repo>/releases/latest/download/latest.json"
 ```
 
 Then bundle normally:
@@ -36,7 +43,10 @@ npm run bundle:mac
 - If a release is available, Fika downloads and installs it.
 - The app relaunches after installation.
 
-If the updater is not configured, the button shows the configuration error instead of crashing.
+The app uses these defaults:
+
+- updater endpoint: `https://github.com/wangzhs/fika/releases/latest/download/latest.json`
+- public key: `src-tauri/updater.pub`
 
 ## 4. GitHub Actions secrets
 
@@ -44,11 +54,10 @@ Set these repository secrets:
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-- `FIKA_UPDATER_PUBKEY`
 
 The workflow uses:
 
-- `https://github.com/<repo>/releases/latest/download/latest.json`
+- `https://github.com/wangzhs/fika/releases/latest/download/latest.json`
 
 as the updater endpoint.
 

@@ -1173,14 +1173,10 @@ async fn get_open_target(path: String) -> Result<OpenTarget, String> {
 fn build_runtime_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
     let endpoint = option_env!("FIKA_UPDATER_ENDPOINT")
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            "Updater is not configured. Set FIKA_UPDATER_ENDPOINT at build time.".to_string()
-        })?;
+        .unwrap_or("https://github.com/wangzhs/fika/releases/latest/download/latest.json");
     let pubkey = option_env!("FIKA_UPDATER_PUBKEY")
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            "Updater is not configured. Set FIKA_UPDATER_PUBKEY at build time.".to_string()
-        })?;
+        .unwrap_or(include_str!("../updater.pub").trim());
 
     let endpoint = endpoint
         .parse()

@@ -7,6 +7,10 @@ cd "$ROOT_DIR"
 
 TARGET="${1:-mac}"
 
+if [[ -f "$ROOT_DIR/.tauri/fika.key" && -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" && -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+  export TAURI_SIGNING_PRIVATE_KEY_PATH="$ROOT_DIR/.tauri/fika.key"
+fi
+
 case "$TARGET" in
   mac)
     echo "Building macOS bundles (.app + .dmg)..."
@@ -26,4 +30,3 @@ case "$TARGET" in
     exit 1
     ;;
 esac
-
