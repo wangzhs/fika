@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { dracula } from "@uiw/codemirror-theme-dracula";
 import { EditorView, Decoration, gutter, GutterMarker, keymap } from "@codemirror/view";
@@ -439,6 +439,9 @@ function splitMarkdownHref(target: string) {
 
 type CommandPaletteGroup = "Files" | "Search" | "Editor" | "Git" | "Workspace" | "View";
 
+const MAX_RENDERED_GIT_FILES = 400;
+const MAX_RENDERED_GIT_HISTORY = 300;
+
 interface CommandPaletteCommand {
   id: string;
   title: string;
@@ -472,6 +475,8 @@ function App() {
   const [imageNaturalSize, setImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const markdownPreviewScrollRef = useRef<HTMLDivElement | null>(null);
   const pendingMarkdownAnchorRef = useRef<{ path: string; id: string } | null>(null);
+  const finderPreviewCacheRef = useRef(new Map<string, { content: string; unsupported: boolean }>());
+  const workspaceRestoreRunRef = useRef(0);
   const shortcutLabel = useCallback((key: string, options?: { shift?: boolean; alt?: boolean }) => {
     if (isMac) {
       return `${options?.shift ? "⇧" : ""}${options?.alt ? "⌥" : ""}⌘${key}`;
@@ -490,6 +495,8 @@ function App() {
   const [projectRoot, setProjectRoot] = useState<string | null>(null);
   const [tree, setTree] = useState<FileNode | null>(null);
   const [projectFilePaths, setProjectFilePaths] = useState<string[]>([]);
+  const [projectFileIndexLoaded, setProjectFileIndexLoaded] = useState(false);
+  const [projectFileIndexLoading, setProjectFileIndexLoading] = useState(false);
   const [autoSaveMode, setAutoSaveMode] = useState<AutoSaveMode>("off");
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
   const [openTabs, setOpenTabs] = useState<EditorDocument[]>([]);
@@ -651,30 +658,46 @@ function App() {
     return toProjectRelativePathValue(projectRoot, absolutePath);
   }, [projectRoot]);
 
-  const parsedFinderQuery = useMemo(() => parseFinderQuery(query), [query]);
-
+  const deferredFinderQuery = useDeferredValue(query);
+  const parsedFinderQuery = useMemo(() => parseFinderQuery(deferredFinderQuery), [deferredFinderQuery]);
+  const finderFileEntries = useMemo(
+    () => projectFilePaths.map((path) => {
+      const relativePath = toRelativePath(projectRoot, path);
+      return {
+        path,
+        relativePath,
+        normalizedRelativePath: relativePath.toLowerCase(),
+      };
+    }),
+    [projectFilePaths, projectRoot]
+  );
+  const recentFileOrder = useMemo(
+    () => new Map(recentFilePaths.map((path, index) => [path, index])),
+    [recentFilePaths]
+  );
   const filtered = useMemo(() => {
     const q = parsedFinderQuery.baseQuery.toLowerCase();
-    const items = projectFilePaths
-      .map((path) => {
-        const relativePath = toRelativePath(projectRoot, path);
-        const score = q ? scoreFileMatch(relativePath, q) : 0;
+    const items = finderFileEntries
+      .map((entry) => {
+        const score = q ? scoreFileMatch(entry.normalizedRelativePath, q) : 0;
         return {
-          path,
-          relativePath,
+          path: entry.path,
+          relativePath: entry.relativePath,
           score,
+          recentIndex: recentFileOrder.get(entry.path) ?? Number.MAX_SAFE_INTEGER,
           lineNumber: parsedFinderQuery.lineNumber,
           columnNumber: parsedFinderQuery.columnNumber,
         };
       })
       .filter((item) => !q || item.score >= 0)
       .sort((a, b) => {
+        if (!q && a.recentIndex !== b.recentIndex) return a.recentIndex - b.recentIndex;
         if (b.score !== a.score) return b.score - a.score;
         return a.relativePath.localeCompare(b.relativePath);
       });
 
-    return items;
-  }, [parsedFinderQuery, projectFilePaths, projectRoot]);
+    return items.slice(0, q ? 300 : 200);
+  }, [finderFileEntries, parsedFinderQuery, recentFileOrder]);
 
   const openCommandPalette = useCallback(() => {
     setCommandPaletteOpen(true);
@@ -1013,6 +1036,26 @@ function App() {
     () => commitFiles?.files ?? [],
     [commitFiles]
   );
+  const renderedStagedFiles = useMemo(
+    () => filteredStagedFiles.slice(0, MAX_RENDERED_GIT_FILES),
+    [filteredStagedFiles]
+  );
+  const renderedGitChanges = useMemo(
+    () => filteredGitChanges.slice(0, MAX_RENDERED_GIT_FILES),
+    [filteredGitChanges]
+  );
+  const renderedLogFiles = useMemo(
+    () => visibleLogFiles.slice(0, MAX_RENDERED_GIT_FILES),
+    [visibleLogFiles]
+  );
+  const renderedGitHistory = useMemo(
+    () => gitHistory.slice(0, MAX_RENDERED_GIT_HISTORY),
+    [gitHistory]
+  );
+  const hiddenStagedFilesCount = filteredStagedFiles.length - renderedStagedFiles.length;
+  const hiddenGitChangesCount = filteredGitChanges.length - renderedGitChanges.length;
+  const hiddenLogFilesCount = visibleLogFiles.length - renderedLogFiles.length;
+  const hiddenGitHistoryCount = gitHistory.length - renderedGitHistory.length;
   const stagedStatusSummary = useMemo(() => {
     const summary = new Map<string, number>();
     for (const file of stagedFiles) {
@@ -1273,6 +1316,25 @@ function App() {
     return groups;
   }, [globalSearchResults]);
 
+  const loadProjectFileIndex = useCallback(async (force = false) => {
+    if (!projectRoot) return [];
+    if (projectFileIndexLoading) return projectFilePaths;
+    if (projectFileIndexLoaded && !force) return projectFilePaths;
+
+    setProjectFileIndexLoading(true);
+    try {
+      const nextPaths = await listProjectFiles(projectRoot);
+      setProjectFilePaths(nextPaths);
+      setProjectFileIndexLoaded(true);
+      return nextPaths;
+    } catch (e) {
+      setError(String(e));
+      return projectFilePaths;
+    } finally {
+      setProjectFileIndexLoading(false);
+    }
+  }, [projectRoot, projectFileIndexLoaded, projectFileIndexLoading, projectFilePaths]);
+
   // Add a project to recent projects list
   const addRecentProject = useCallback((rootPath: string) => {
     const name = rootPath.split(/[\/\\]/).pop() || rootPath;
@@ -1305,9 +1367,11 @@ function App() {
       setProjectRoot(result.root);
       setRootName(result.root.split(/[\/\\]/).pop() || result.root);
       setTree(result.tree);
-      void listProjectFiles(result.root)
-        .then(setProjectFilePaths)
-        .catch(() => setProjectFilePaths([]));
+      workspaceRestoreRunRef.current += 1;
+      finderPreviewCacheRef.current.clear();
+      setProjectFilePaths([]);
+      setProjectFileIndexLoaded(false);
+      setProjectFileIndexLoading(false);
       setOpenTabs([]);
       setActiveTabPath("");
       setSelectedTreePath(workspaceState.selected_tree_path || result.tree.path);
@@ -1374,10 +1438,14 @@ function App() {
     pendingOpenPathsRef.current.clear();
     pendingWorkspaceStateRef.current = null;
     preferredWorkspaceStateRef.current = null;
+    workspaceRestoreRunRef.current += 1;
+    finderPreviewCacheRef.current.clear();
     setProjectRoot(null);
     setRootName(null);
     setTree(null);
     setProjectFilePaths([]);
+    setProjectFileIndexLoaded(false);
+    setProjectFileIndexLoading(false);
     setLoadingFolderPaths(new Set());
     setAutoSaveMode("off");
     setOpenFolders(new Set());
@@ -1640,12 +1708,32 @@ function App() {
 
     void (async () => {
       const uniquePaths = [...new Set(pendingState.open_tabs.filter(Boolean))];
+      const prioritizedPaths = pendingState.active_tab_path
+        ? [
+            pendingState.active_tab_path,
+            ...uniquePaths.filter((path) => path !== pendingState.active_tab_path),
+          ]
+        : uniquePaths;
+      const restoreRunId = workspaceRestoreRunRef.current + 1;
+      workspaceRestoreRunRef.current = restoreRunId;
       setPinnedTabPaths(new Set(pendingState.pinned_tab_paths ?? []));
       editorViewStateRef.current = new Map(Object.entries(pendingState.editor_view_states ?? {}));
       setAutoSaveMode(pendingState.auto_save_mode ?? "off");
-      for (const path of uniquePaths) {
-        await handleOpenFile(path, undefined, "workspace-restore");
+
+      const [primaryPath, ...secondaryPaths] = prioritizedPaths;
+      if (primaryPath) {
+        await handleOpenFile(primaryPath, undefined, "workspace-restore-primary");
       }
+
+      window.setTimeout(() => {
+        if (workspaceRestoreRunRef.current !== restoreRunId) return;
+        void (async () => {
+          for (const path of secondaryPaths) {
+            if (workspaceRestoreRunRef.current !== restoreRunId) return;
+            await handleOpenFile(path, undefined, "workspace-restore-secondary");
+          }
+        })();
+      }, 0);
 
       if (pendingState.active_tab_path) {
         setActiveTabPath(pendingState.active_tab_path);
@@ -2953,7 +3041,7 @@ function App() {
         ? `${normalizeFilePath(projectRoot).replace(/\/$/, "")}/${normalizeFilePath(filePath)}`
         : filePath;
 
-      const existsAfterDiscard = projectFilePaths.includes(absolutePath) || openTabs.some((tab) => tab.path === absolutePath);
+      const existsAfterDiscard = (!projectFileIndexLoaded || projectFilePaths.includes(absolutePath)) || openTabs.some((tab) => tab.path === absolutePath);
 
       if (activeTab?.path === absolutePath) {
         try {
@@ -2973,7 +3061,9 @@ function App() {
         }
       } else if (!existsAfterDiscard) {
         setOpenTabs((prev) => prev.filter((tab) => tab.path !== absolutePath));
-        setProjectFilePaths((prev) => prev.filter((path) => path !== absolutePath));
+        if (projectFileIndexLoaded) {
+          setProjectFilePaths((prev) => prev.filter((path) => path !== absolutePath));
+        }
       }
 
       const parentPath = getParentDirPath(absolutePath, projectRoot);
@@ -2984,7 +3074,7 @@ function App() {
     } catch (e) {
       setError(String(e));
     }
-  }, [projectRoot, projectFilePaths, openTabs, activeTab, activeTabPath, refreshGitData, refreshTreeSubdirectory]);
+  }, [projectRoot, projectFileIndexLoaded, projectFilePaths, openTabs, activeTab, activeTabPath, refreshGitData, refreshTreeSubdirectory]);
 
   const handleDiscardFileChanges = useCallback((filePath: string) => {
     setDiscardFileModalPath(filePath);
@@ -3049,14 +3139,16 @@ function App() {
     const fullPath = `${dirPath}/${name}`;
     try {
       await createFile(projectRoot, fullPath);
-      setProjectFilePaths((prev) => (prev.includes(fullPath) ? prev : [...prev, fullPath].sort()));
+      if (projectFileIndexLoaded) {
+        setProjectFilePaths((prev) => (prev.includes(fullPath) ? prev : [...prev, fullPath].sort()));
+      }
       await refreshTreeSubdirectory(dirPath);
       // Open the new file
       await handleOpenFile(fullPath, undefined, "create-file");
     } catch (e) {
       setError(String(e));
     }
-  }, [projectRoot, handleOpenFile, refreshTreeSubdirectory]);
+  }, [projectRoot, projectFileIndexLoaded, handleOpenFile, refreshTreeSubdirectory]);
 
   const handleCreateDirectory = useCallback(async (dirPath: string, name: string) => {
     if (!projectRoot) return;
@@ -3131,16 +3223,18 @@ function App() {
           ? { ...entry, path: replacePathPrefix(entry.path, oldPath, newPath) }
           : entry
       )));
-      setProjectFilePaths((prev) => prev.map((path) => (
-        isSameOrDescendantPath(path, oldPath)
-          ? replacePathPrefix(path, oldPath, newPath)
-          : path
-      )));
+      if (projectFileIndexLoaded) {
+        setProjectFilePaths((prev) => prev.map((path) => (
+          isSameOrDescendantPath(path, oldPath)
+            ? replacePathPrefix(path, oldPath, newPath)
+            : path
+        )));
+      }
       await refreshTreeSubdirectory(parentPath || projectRoot);
     } catch (e) {
       setError(String(e));
     }
-  }, [projectRoot, isSameOrDescendantPath, replacePathPrefix, refreshTreeSubdirectory]);
+  }, [projectRoot, projectFileIndexLoaded, isSameOrDescendantPath, replacePathPrefix, refreshTreeSubdirectory]);
 
   const handleDelete = useCallback(async (path: string, isDir: boolean) => {
     if (!projectRoot) return;
@@ -3198,28 +3292,29 @@ function App() {
         if (!isSameOrDescendantPath(prev, path)) return prev;
         return nextDisplayTabs.length > 0 ? nextDisplayTabs[0].path : "";
       });
-      setProjectFilePaths((prev) => prev.filter((item) => !isSameOrDescendantPath(item, path)));
+      if (projectFileIndexLoaded) {
+        setProjectFilePaths((prev) => prev.filter((item) => !isSameOrDescendantPath(item, path)));
+      }
       const parentPath = getParentDirPath(path, projectRoot);
       setTree((currentTree) => currentTree ? removeNodeByPath(currentTree, path) : currentTree);
       await refreshTreeSubdirectory(parentPath);
     } catch (e) {
       setError(String(e));
     }
-  }, [projectRoot, openTabs, navHistory, isSameOrDescendantPath, refreshTreeSubdirectory]);
+  }, [projectRoot, projectFileIndexLoaded, openTabs, navHistory, isSameOrDescendantPath, refreshTreeSubdirectory]);
 
   const handleRefreshTree = useCallback(async () => {
     if (!projectRoot) return;
     try {
-      const [newTree, nextProjectFilePaths] = await Promise.all([
-        refreshTree(projectRoot),
-        listProjectFiles(projectRoot).catch(() => projectFilePaths),
-      ]);
+      const newTree = await refreshTree(projectRoot);
       setTree(newTree);
-      setProjectFilePaths(nextProjectFilePaths);
+      if (projectFileIndexLoaded) {
+        void loadProjectFileIndex(true);
+      }
     } catch (e) {
       setError(String(e));
     }
-  }, [projectRoot, projectFilePaths]);
+  }, [projectRoot, projectFileIndexLoaded, loadProjectFileIndex]);
 
   // Load session on mount
   useEffect(() => {
@@ -3294,6 +3389,11 @@ function App() {
   }, [query]);
 
   useEffect(() => {
+    if (!finderOpen || !projectRoot || projectFileIndexLoaded || projectFileIndexLoading) return;
+    void loadProjectFileIndex();
+  }, [finderOpen, projectRoot, projectFileIndexLoaded, projectFileIndexLoading, loadProjectFileIndex]);
+
+  useEffect(() => {
     if (!finderOpen) {
       setFinderPreview(null);
       return;
@@ -3315,6 +3415,17 @@ function App() {
       return;
     }
 
+    const cachedPreview = finderPreviewCacheRef.current.get(selectedResult.path);
+    if (cachedPreview) {
+      setFinderPreview({
+        path: selectedResult.path,
+        content: cachedPreview.content,
+        loading: false,
+        unsupported: cachedPreview.unsupported,
+      });
+      return;
+    }
+
     let cancelled = false;
     setFinderPreview({
       path: selectedResult.path,
@@ -3326,7 +3437,11 @@ function App() {
     void readFile(selectedResult.path)
       .then((content) => {
         if (cancelled) return;
-        const preview = content.split("\n").slice(0, 80).join("\n");
+        const preview = content.slice(0, 12000).split("\n").slice(0, 80).join("\n");
+        finderPreviewCacheRef.current.set(selectedResult.path, {
+          content: preview,
+          unsupported: false,
+        });
         setFinderPreview({
           path: selectedResult.path,
           content: preview,
@@ -3336,6 +3451,10 @@ function App() {
       })
       .catch(() => {
         if (cancelled) return;
+        finderPreviewCacheRef.current.set(selectedResult.path, {
+          content: "Preview unavailable for this file.",
+          unsupported: true,
+        });
         setFinderPreview({
           path: selectedResult.path,
           content: "Preview unavailable for this file.",
@@ -3976,7 +4095,10 @@ function App() {
                 onChange={(e) => setQuery(e.target.value)}
               />
               <div className="finder-list">
-                {filtered.map((result, idx) => (
+                {projectFileIndexLoading && (
+                  <div className="finder-empty">Indexing project files...</div>
+                )}
+                {!projectFileIndexLoading && filtered.map((result, idx) => (
                   (() => {
                     const fileName = result.relativePath.split(/[\/\\]/).pop() || result.relativePath;
                     const directoryPath = result.relativePath.includes("/")
@@ -4007,7 +4129,7 @@ function App() {
                     );
                   })()
                 ))}
-                {filtered.length === 0 && (
+                {!projectFileIndexLoading && filtered.length === 0 && (
                   <div className="finder-empty">No files found</div>
                 )}
               </div>
@@ -5467,7 +5589,12 @@ function App() {
                       <div className="changes-empty">{stagedFiles.length === 0 ? "No staged changes" : "No staged files match the current filter"}</div>
                     ) : (
                       <div className="changed-files-list">
-                        {filteredStagedFiles.map((file) => (
+                        {hiddenStagedFilesCount > 0 && (
+                          <div className="list-overflow-note">
+                            Showing first {renderedStagedFiles.length} staged files. Refine the filter to see the remaining {hiddenStagedFilesCount}.
+                          </div>
+                        )}
+                        {renderedStagedFiles.map((file) => (
                           (() => {
                             const scopeLabel = getGitScopeLabel(file.path, stagedPathSet, unstagedPathSet);
                             const detailLabel = file.status === "R" ? "Renamed" : file.status === "D" ? "Deleted" : null;
@@ -5528,7 +5655,12 @@ function App() {
                       <div className="changes-empty">{gitChanges.length === 0 ? "No changes" : "No changed files match the current filter"}</div>
                     ) : (
                       <div className="changed-files-list">
-                        {filteredGitChanges.map((file) => (
+                        {hiddenGitChangesCount > 0 && (
+                          <div className="list-overflow-note">
+                            Showing first {renderedGitChanges.length} changed files. Refine the filter to see the remaining {hiddenGitChangesCount}.
+                          </div>
+                        )}
+                        {renderedGitChanges.map((file) => (
                           (() => {
                             const scopeLabel = getGitScopeLabel(file.path, stagedPathSet, unstagedPathSet);
                             const detailLabel = file.status === "R" ? "Renamed" : file.status === "D" ? "Deleted" : null;
@@ -5644,7 +5776,13 @@ function App() {
                     {commitFiles.files.length === 0 ? (
                       <div className="git-empty">No files changed</div>
                     ) : (
-                      commitFiles.files.map((file) => (
+                      <>
+                        {hiddenLogFilesCount > 0 && (
+                          <div className="list-overflow-note">
+                            Showing first {renderedLogFiles.length} files in this commit. Narrow the scope to see the remaining {hiddenLogFilesCount}.
+                          </div>
+                        )}
+                        {renderedLogFiles.map((file) => (
                         (() => {
                           const displayPath = file.old_path ? `${file.old_path} → ${file.path}` : file.path;
                           return (
@@ -5660,7 +5798,8 @@ function App() {
                         </div>
                           );
                         })()
-                      ))
+                      ))}
+                      </>
                     )}
                   </div>
                 </div>
@@ -5674,7 +5813,13 @@ function App() {
                   {gitHistory.length === 0 ? (
                     <div className="git-empty">No commits found</div>
                   ) : (
-                    gitHistory.map((commit) => (
+                    <>
+                      {hiddenGitHistoryCount > 0 && (
+                        <div className="list-overflow-note">
+                          Showing first {renderedGitHistory.length} commits. Use file history or narrower filters to reduce the list.
+                        </div>
+                      )}
+                      {renderedGitHistory.map((commit) => (
                       <div
                         key={commit.hash}
                         className="commit-item"
@@ -5691,7 +5836,8 @@ function App() {
                           <span className="commit-time">{commit.time}</span>
                         </div>
                       </div>
-                    ))
+                    ))}
+                    </>
                   )}
                 </div>
               )}

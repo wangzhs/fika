@@ -186,6 +186,16 @@ body, html, #root {
   user-select: none;
 }
 
+.tree-overflow-note {
+  margin: 8px 8px 4px;
+  padding: 8px 10px;
+  color: #9aa3ad;
+  font-size: 11px;
+  line-height: 1.45;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .tree-folder,
 .tree-file,
 .tree-empty {
@@ -1977,6 +1987,16 @@ body, html, #root {
 /* Changed Files List */
 .changed-files-list {
   padding: 0;
+}
+
+.list-overflow-note {
+  margin: 8px 16px;
+  padding: 8px 10px;
+  color: #9aa3ad;
+  font-size: 11px;
+  line-height: 1.45;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .changed-file-item {
