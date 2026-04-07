@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +32,8 @@ pub struct FileNode {
     pub path: String,
     pub is_dir: bool,
     pub children: Option<Vec<FileNode>>,
+    pub has_children: Option<bool>,
+    pub children_loaded: Option<bool>,
 }
 
 #[derive(Serialize, Clone)]
@@ -43,6 +48,16 @@ pub struct SearchResult {
     pub line_number: usize,
     pub line_content: String,
     pub matched_fragment: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct SearchOptions {
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub whole_word: bool,
+    #[serde(default)]
+    pub regex: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -63,6 +78,7 @@ pub struct Commit {
 #[derive(Serialize, Clone)]
 pub struct ChangedFile {
     pub path: String,
+    pub old_path: Option<String>,
     pub status: String, // M, A, D, R, C, U
 }
 
@@ -115,6 +131,7 @@ pub struct FileBlame {
 #[derive(Serialize, Clone)]
 pub struct StagedFile {
     pub path: String,
+    pub old_path: Option<String>,
     pub status: String,
 }
 
@@ -129,8 +146,25 @@ pub struct RecentProject {
 pub struct SessionState {
     pub project_root: Option<String>,
     pub open_tabs: Vec<String>,
+    #[serde(default)]
+    pub pinned_tab_paths: Vec<String>,
+    #[serde(default)]
+    pub editor_view_states: HashMap<String, EditorViewStateSnapshot>,
+    #[serde(default)]
+    pub auto_save_mode: String,
     pub active_tab_path: String,
     pub open_folders: Vec<String>,
+    pub recent_file_paths: Vec<String>,
+    pub selected_tree_path: String,
+    pub bottom_panel_tab: String,
+    pub is_bottom_panel_open: bool,
+    pub bottom_panel_height: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct EditorViewStateSnapshot {
+    pub selection_anchor: usize,
+    pub scroll_top: u32,
 }
 
 #[derive(Serialize)]
@@ -167,7 +201,7 @@ async fn open_folder(handle: tauri::AppHandle) -> Result<Option<FolderResult>, S
     };
     let root = path.to_string();
 
-    let tree = match read_dir_recursive(&root) {
+    let tree = match read_dir_shallow(&root) {
         Ok(t) => t,
         Err(e) => return Err(format!("Failed to read folder: {}", e)),
     };
@@ -175,7 +209,29 @@ async fn open_folder(handle: tauri::AppHandle) -> Result<Option<FolderResult>, S
     Ok(Some(FolderResult { root, tree }))
 }
 
-fn read_dir_recursive(dir: &str) -> Result<FileNode, String> {
+fn should_skip_entry(name: &str, is_dir: bool) -> bool {
+    is_dir && (name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist")
+}
+
+fn directory_has_visible_children(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_dir = path.is_dir();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if should_skip_entry(&name, is_dir) {
+            continue;
+        }
+        return true;
+    }
+
+    false
+}
+
+fn read_dir_shallow(dir: &str) -> Result<FileNode, String> {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => {
@@ -187,6 +243,8 @@ fn read_dir_recursive(dir: &str) -> Result<FileNode, String> {
                 path: dir.to_string(),
                 is_dir: true,
                 children: Some(vec![]),
+                has_children: Some(false),
+                children_loaded: Some(true),
             });
         }
     };
@@ -200,23 +258,31 @@ fn read_dir_recursive(dir: &str) -> Result<FileNode, String> {
         let is_dir = path.is_dir();
 
         if is_dir {
-            if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
+            if should_skip_entry(&name, true) {
                 continue;
             }
-            if let Ok(child) = read_dir_recursive(&path_str) {
-                children.push(child);
-            }
+            children.push(FileNode {
+                name,
+                path: path_str,
+                is_dir: true,
+                children: None,
+                has_children: Some(directory_has_visible_children(&path)),
+                children_loaded: Some(false),
+            });
         } else {
             children.push(FileNode {
                 name,
                 path: path_str,
                 is_dir: false,
                 children: None,
+                has_children: Some(false),
+                children_loaded: Some(true),
             });
         }
     }
 
     children.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+    let has_children = !children.is_empty();
 
     Ok(FileNode {
         name: std::path::Path::new(dir)
@@ -226,6 +292,8 @@ fn read_dir_recursive(dir: &str) -> Result<FileNode, String> {
         path: dir.to_string(),
         is_dir: true,
         children: Some(children),
+        has_children: Some(has_children),
+        children_loaded: Some(true),
     })
 }
 
@@ -286,22 +354,23 @@ async fn confirm_discard_file(handle: tauri::AppHandle, file: String) -> Result<
 }
 
 #[tauri::command]
-async fn search_in_project(root: String, query: String) -> Result<Vec<SearchResult>, String> {
+async fn search_in_project(root: String, query: String, options: Option<SearchOptions>) -> Result<Vec<SearchResult>, String> {
     if query.is_empty() {
         return Ok(vec![]);
     }
 
-    if let Ok(results) = search_with_ripgrep(&root, &query) {
+    let options = options.unwrap_or_default();
+
+    if let Ok(results) = search_with_ripgrep(&root, &query, &options) {
         return Ok(results);
     }
 
-    let query_lower = query.to_lowercase();
     let mut results = Vec::new();
-    search_recursive(Path::new(&root), &query_lower, &mut results);
+    search_recursive(Path::new(&root), &query, &options, &mut results);
     Ok(results)
 }
 
-fn search_recursive(dir: &Path, query: &str, results: &mut Vec<SearchResult>) {
+fn search_recursive(dir: &Path, query: &str, options: &SearchOptions, results: &mut Vec<SearchResult>) {
     // Try to read directory, but don't fail the entire search if this directory can't be read
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
@@ -318,7 +387,7 @@ fn search_recursive(dir: &Path, query: &str, results: &mut Vec<SearchResult>) {
                 continue;
             }
             // Recursively search subdirectory, but don't fail if it errors
-            search_recursive(&path, query, results);
+            search_recursive(&path, query, options, results);
         } else {
             // Skip binary files by extension
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
@@ -338,8 +407,7 @@ fn search_recursive(dir: &Path, query: &str, results: &mut Vec<SearchResult>) {
             if let Ok(content) = fs::read_to_string(&path) {
                 let path_str = path.to_string_lossy().to_string();
                 for (line_number, line) in content.lines().enumerate() {
-                    if line.to_lowercase().contains(query) {
-                        let matched_fragment = extract_matched_fragment(line, query);
+                    if let Some(matched_fragment) = line_matches_query(line, query, options) {
                         results.push(SearchResult {
                             path: path_str.clone(),
                             line_number: line_number + 1,
@@ -353,26 +421,44 @@ fn search_recursive(dir: &Path, query: &str, results: &mut Vec<SearchResult>) {
     }
 }
 
-fn search_with_ripgrep(root: &str, query: &str) -> Result<Vec<SearchResult>, String> {
+fn search_with_ripgrep(root: &str, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>, String> {
+    let mut args: Vec<&str> = vec![
+        "--json",
+        "--line-number",
+        "--hidden",
+        "--glob", "!.git",
+        "--glob", "!node_modules",
+        "--glob", "!dist",
+        "--glob", "!target",
+        "--glob", "!.next",
+        "--glob", "!coverage",
+        "--glob", "!.turbo",
+        "--glob", "!.cache",
+        "--glob", "!build",
+        "--glob", "!out",
+    ];
+
+    if options.regex {
+        args.push("--regexp");
+    } else {
+        args.push("--fixed-strings");
+    }
+
+    if options.case_sensitive {
+        args.push("--case-sensitive");
+    } else {
+        args.push("--smart-case");
+    }
+
+    if options.whole_word && !options.regex {
+        args.push("--word-regexp");
+    }
+
+    args.push(query);
+    args.push(root);
+
     let output = Command::new("rg")
-        .args([
-            "--json",
-            "--line-number",
-            "--smart-case",
-            "--hidden",
-            "--glob", "!.git",
-            "--glob", "!node_modules",
-            "--glob", "!dist",
-            "--glob", "!target",
-            "--glob", "!.next",
-            "--glob", "!coverage",
-            "--glob", "!.turbo",
-            "--glob", "!.cache",
-            "--glob", "!build",
-            "--glob", "!out",
-            query,
-            root,
-        ])
+        .args(args)
         .output()
         .map_err(|e| format!("Failed to run rg: {}", e))?;
 
@@ -422,6 +508,43 @@ fn search_with_ripgrep(root: &str, query: &str) -> Result<Vec<SearchResult>, Str
     }
 
     Ok(results)
+}
+
+fn is_word_char(ch: Option<char>) -> bool {
+    matches!(ch, Some(c) if c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn line_matches_query(line: &str, query: &str, options: &SearchOptions) -> Option<String> {
+    if options.regex {
+        let pattern = if options.case_sensitive {
+            regex::Regex::new(query).ok()?
+        } else {
+            regex::RegexBuilder::new(query).case_insensitive(true).build().ok()?
+        };
+        let matched = pattern.find(line)?;
+        return Some(line[matched.start()..matched.end()].to_string());
+    }
+
+    let haystack = if options.case_sensitive {
+        line.to_string()
+    } else {
+        line.to_lowercase()
+    };
+    let needle = if options.case_sensitive {
+        query.to_string()
+    } else {
+        query.to_lowercase()
+    };
+
+    let found_index = haystack.find(&needle)?;
+    let before_char = line[..found_index].chars().last();
+    let after_char = line[found_index + query.len()..].chars().next();
+
+    if options.whole_word && (is_word_char(before_char) || is_word_char(after_char)) {
+        return None;
+    }
+
+    Some(line[found_index..found_index + query.len()].to_string())
 }
 
 // Git helpers
@@ -577,15 +700,17 @@ fn parse_name_status_z(output: &[u8]) -> Vec<ChangedFile> {
         let Some(file_path) = entries.next() else {
             break;
         };
-        let final_path = if matches!(status_code, 'R' | 'C') {
-            entries.next().unwrap_or(file_path).to_string()
+        let (old_path, final_path) = if matches!(status_code, 'R' | 'C') {
+            let new_path = entries.next().unwrap_or(file_path).to_string();
+            (Some(file_path.to_string()), new_path)
         } else {
-            file_path.to_string()
+            (None, file_path.to_string())
         };
 
         if let Some(status) = git_code_to_status(status_code) {
             files.push(ChangedFile {
                 path: final_path,
+                old_path,
                 status,
             });
         }
@@ -611,6 +736,7 @@ async fn get_working_tree_changes(path: String) -> Result<Vec<ChangedFile>, Stri
         }
         files.push(ChangedFile {
             path: file_path.to_string(),
+            old_path: None,
             status: "?".to_string(),
         });
     }
@@ -646,29 +772,20 @@ async fn get_commit_files(path: String, commit: String, file: Option<String>) ->
     }
 
     let output = if let Some(file_path) = file.filter(|value| !value.trim().is_empty()) {
-        run_git_command(&["show", "--name-status", "--format=", &commit, "--", &file_path], &path)?
+        run_git_command_bytes(&["show", "--name-status", "-z", "--format=", &commit, "--", &file_path], &path)?
     } else {
-        run_git_command(&["show", "--name-status", "--format=", &commit], &path)?
+        run_git_command_bytes(&["show", "--name-status", "-z", "--format=", &commit], &path)?
     };
-    let mut files = Vec::new();
-
-    for line in output.lines() {
-        if line.is_empty() {
-            continue;
-        }
-
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            let status = parts[0].to_string();
-            let file_path = parts[1].to_string();
-            // Convert relative path to absolute path
-            let absolute_path = std::path::Path::new(&path).join(&file_path);
-            files.push(ChangedFile {
-                path: absolute_path.to_string_lossy().to_string(),
-                status,
-            });
-        }
-    }
+    let files = parse_name_status_z(&output)
+        .into_iter()
+        .map(|file| ChangedFile {
+            path: std::path::Path::new(&path).join(&file.path).to_string_lossy().to_string(),
+            old_path: file
+                .old_path
+                .map(|old_path| std::path::Path::new(&path).join(old_path).to_string_lossy().to_string()),
+            status: file.status,
+        })
+        .collect();
 
     Ok(CommitFiles {
         hash: commit,
@@ -951,6 +1068,7 @@ async fn get_staged_files(path: String) -> Result<Vec<StagedFile>, String> {
         .into_iter()
         .map(|file| StagedFile {
             path: file.path,
+            old_path: file.old_path,
             status: file.status,
         })
         .collect();
@@ -1041,7 +1159,67 @@ async fn delete_path(project_root: String, path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn refresh_tree(root: String) -> Result<FileNode, String> {
-    read_dir_recursive(&root)
+    read_dir_shallow(&root)
+}
+
+fn list_files_recursive(dir: &Path, files: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_dir = path.is_dir();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if should_skip_entry(&name, is_dir) {
+            continue;
+        }
+
+        if is_dir {
+            list_files_recursive(&path, files);
+        } else {
+            files.push(path.to_string_lossy().to_string());
+        }
+    }
+}
+
+#[tauri::command]
+async fn list_project_files(root: String) -> Result<Vec<String>, String> {
+    if let Ok(output) = Command::new("rg")
+        .args([
+            "--files",
+            "--hidden",
+            "--glob", "!.git",
+            "--glob", "!node_modules",
+            "--glob", "!dist",
+            "--glob", "!target",
+            "--glob", "!.next",
+            "--glob", "!coverage",
+            "--glob", "!.turbo",
+            "--glob", "!.cache",
+            "--glob", "!build",
+            "--glob", "!out",
+            root.as_str(),
+        ])
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let normalized_root = Path::new(&root)
+                .canonicalize()
+                .unwrap_or_else(|_| Path::new(&root).to_path_buf());
+            let files = stdout
+                .lines()
+                .map(|line| normalized_root.join(line).to_string_lossy().to_string())
+                .collect();
+            return Ok(files);
+        }
+    }
+
+    let mut files = Vec::new();
+    list_files_recursive(Path::new(&root), &mut files);
+    Ok(files)
 }
 
 // Persistence - using simple JSON files in app's config directory
@@ -1053,6 +1231,93 @@ fn get_config_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, S
             dir
         })
         .map_err(|_| "Failed to get config directory".to_string())
+}
+
+fn sanitize_window_label(label: &str) -> String {
+    label
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn session_file_path(app_handle: &tauri::AppHandle, window_label: &str) -> Result<std::path::PathBuf, String> {
+    let config_dir = get_config_dir(app_handle)?;
+    Ok(config_dir.join(format!("session-{}.json", sanitize_window_label(window_label))))
+}
+
+fn workspace_file_path(app_handle: &tauri::AppHandle, project_root: &str) -> Result<std::path::PathBuf, String> {
+    let config_dir = get_config_dir(app_handle)?;
+    let workspace_dir = config_dir.join("workspaces");
+    fs::create_dir_all(&workspace_dir).map_err(|e| format!("Failed to create workspace directory: {}", e))?;
+
+    let mut hasher = DefaultHasher::new();
+    project_root.hash(&mut hasher);
+    Ok(workspace_dir.join(format!("{:016x}.json", hasher.finish())))
+}
+
+fn empty_session_state(project_root: Option<String>) -> SessionState {
+    SessionState {
+        project_root,
+        open_tabs: vec![],
+        pinned_tab_paths: vec![],
+        editor_view_states: HashMap::new(),
+        auto_save_mode: "off".to_string(),
+        active_tab_path: String::new(),
+        open_folders: vec![],
+        recent_file_paths: vec![],
+        selected_tree_path: String::new(),
+        bottom_panel_tab: "diff".to_string(),
+        is_bottom_panel_open: false,
+        bottom_panel_height: 260,
+    }
+}
+
+fn filter_session_state(state: SessionState) -> SessionState {
+    let project_root = state.project_root.filter(|p| Path::new(p).exists());
+    let active_tab_path = if Path::new(&state.active_tab_path).exists() {
+        state.active_tab_path
+    } else {
+        String::new()
+    };
+    let selected_tree_path = if Path::new(&state.selected_tree_path).exists() {
+        state.selected_tree_path
+    } else {
+        active_tab_path.clone()
+    };
+    let bottom_panel_tab = match state.bottom_panel_tab.as_str() {
+        "diff" | "log" | "blame" => state.bottom_panel_tab,
+        _ => "diff".to_string(),
+    };
+    let auto_save_mode = match state.auto_save_mode.as_str() {
+        "off" | "after_delay" => state.auto_save_mode,
+        _ => "off".to_string(),
+    };
+    let editor_view_states = state
+        .editor_view_states
+        .into_iter()
+        .filter(|(path, _)| Path::new(path).exists())
+        .collect();
+
+    SessionState {
+        project_root,
+        open_tabs: state.open_tabs.into_iter().filter(|p| Path::new(p).exists()).collect(),
+        pinned_tab_paths: state.pinned_tab_paths.into_iter().filter(|p| Path::new(p).exists()).collect(),
+        editor_view_states,
+        auto_save_mode,
+        active_tab_path,
+        open_folders: state.open_folders.into_iter().filter(|p| Path::new(p).exists()).collect(),
+        recent_file_paths: state.recent_file_paths.into_iter().filter(|p| Path::new(p).exists()).collect(),
+        selected_tree_path,
+        bottom_panel_tab,
+        is_bottom_panel_open: state.is_bottom_panel_open,
+        bottom_panel_height: state.bottom_panel_height.max(160),
+    }
 }
 
 #[tauri::command]
@@ -1086,61 +1351,49 @@ async fn load_recent_projects(app_handle: tauri::AppHandle) -> Result<Vec<Recent
 }
 
 #[tauri::command]
-async fn save_session(app_handle: tauri::AppHandle, state: SessionState) -> Result<(), String> {
-    let config_dir = get_config_dir(&app_handle)?;
-    let file_path = config_dir.join("session.json");
-
-    // Filter out tabs for files that no longer exist
-    let valid_tabs: Vec<String> = state.open_tabs
-        .into_iter()
-        .filter(|p| Path::new(p).exists())
-        .collect();
-
-    let filtered_state = SessionState {
-        project_root: state.project_root.filter(|p| Path::new(p).exists()),
-        open_tabs: valid_tabs,
-        active_tab_path: if Path::new(&state.active_tab_path).exists() {
-            state.active_tab_path
-        } else {
-            String::new()
-        },
-        open_folders: state.open_folders.into_iter().filter(|p| Path::new(p).exists()).collect(),
-    };
-
+async fn save_session(
+    app_handle: tauri::AppHandle,
+    window_label: String,
+    state: SessionState,
+) -> Result<(), String> {
+    let file_path = session_file_path(&app_handle, &window_label)?;
+    let filtered_state = filter_session_state(state);
     let json = serde_json::to_string(&filtered_state).map_err(|e| format!("Failed to serialize: {}", e))?;
-    fs::write(file_path, json).map_err(|e| format!("Failed to write: {}", e))
+    fs::write(&file_path, json).map_err(|e| format!("Failed to write: {}", e))?;
+
+    if let Some(project_root) = &filtered_state.project_root {
+        let workspace_path = workspace_file_path(&app_handle, project_root)?;
+        let workspace_json = serde_json::to_string(&filtered_state).map_err(|e| format!("Failed to serialize workspace: {}", e))?;
+        fs::write(workspace_path, workspace_json).map_err(|e| format!("Failed to write workspace: {}", e))?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
-async fn load_session(app_handle: tauri::AppHandle) -> Result<SessionState, String> {
-    let config_dir = get_config_dir(&app_handle)?;
-    let file_path = config_dir.join("session.json");
+async fn load_session(app_handle: tauri::AppHandle, window_label: String) -> Result<SessionState, String> {
+    let file_path = session_file_path(&app_handle, &window_label)?;
 
     if !file_path.exists() {
-        return Ok(SessionState {
-            project_root: None,
-            open_tabs: vec![],
-            active_tab_path: String::new(),
-            open_folders: vec![],
-        });
+        return Ok(empty_session_state(None));
     }
 
     let content = fs::read_to_string(file_path).map_err(|e| format!("Failed to read: {}", e))?;
     let state: SessionState = serde_json::from_str(&content).map_err(|e| format!("Failed to parse: {}", e))?;
+    Ok(filter_session_state(state))
+}
 
-    // Filter out invalid paths
-    let valid_state = SessionState {
-        project_root: state.project_root.filter(|p| Path::new(p).exists()),
-        open_tabs: state.open_tabs.into_iter().filter(|p| Path::new(p).exists()).collect(),
-        active_tab_path: if Path::new(&state.active_tab_path).exists() {
-            state.active_tab_path
-        } else {
-            String::new()
-        },
-        open_folders: state.open_folders.into_iter().filter(|p| Path::new(p).exists()).collect(),
-    };
+#[tauri::command]
+async fn load_workspace(app_handle: tauri::AppHandle, project_root: String) -> Result<SessionState, String> {
+    let file_path = workspace_file_path(&app_handle, &project_root)?;
 
-    Ok(valid_state)
+    if !file_path.exists() {
+        return Ok(empty_session_state(Some(project_root)));
+    }
+
+    let content = fs::read_to_string(file_path).map_err(|e| format!("Failed to read workspace: {}", e))?;
+    let state: SessionState = serde_json::from_str(&content).map_err(|e| format!("Failed to parse workspace: {}", e))?;
+    Ok(filter_session_state(state))
 }
 
 #[tauri::command]
@@ -1444,11 +1697,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_folder, read_file, write_file, set_unsaved_changes_flag, confirm_discard_file, search_in_project,
+            list_project_files,
             get_current_branch, get_branches, switch_branch,
             get_git_history, get_working_tree_changes, get_file_diff, get_commit_files,
             get_file_blame, stage_file, unstage_file, discard_file_changes, commit, get_staged_files,
             create_file, create_directory, rename_path, delete_path, refresh_tree,
-            save_recent_projects, load_recent_projects, save_session, load_session, get_open_target,
+            save_recent_projects, load_recent_projects, save_session, load_session, load_workspace, get_open_target,
             check_for_updates, install_update
         ])
         .build(tauri::generate_context!())

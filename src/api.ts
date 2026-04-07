@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FolderResult, SearchResult, FileBlame, StagedFile, RecentProject, SessionState, FileNode } from "./types";
+import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FolderResult, SearchResult, SearchOptions, FileBlame, StagedFile, RecentProject, SessionState, FileNode } from "./types";
 
 export function openFolder() {
   return invoke<FolderResult | null>("open_folder");
@@ -21,8 +21,8 @@ export function confirmDiscardFile(file: string) {
   return invoke<boolean>("confirm_discard_file", { file });
 }
 
-export function searchInProject(root: string, query: string) {
-  return invoke<SearchResult[]>("search_in_project", { root, query });
+export function searchInProject(root: string, query: string, options?: SearchOptions) {
+  return invoke<SearchResult[]>("search_in_project", { root, query, options });
 }
 
 // Git API
@@ -101,6 +101,10 @@ export function refreshTree(root: string) {
   return invoke<FileNode>("refresh_tree", { root });
 }
 
+export function listProjectFiles(root: string) {
+  return invoke<string[]>("list_project_files", { root });
+}
+
 // Persistence API
 export function saveRecentProjects(projects: RecentProject[]) {
   return invoke<void>("save_recent_projects", { projects });
@@ -110,12 +114,16 @@ export function loadRecentProjects() {
   return invoke<RecentProject[]>("load_recent_projects");
 }
 
-export function saveSession(state: SessionState) {
-  return invoke<void>("save_session", { state });
+export function saveSession(windowLabel: string, state: SessionState) {
+  return invoke<void>("save_session", { windowLabel, state });
 }
 
-export function loadSession() {
-  return invoke<SessionState>("load_session");
+export function loadSession(windowLabel: string) {
+  return invoke<SessionState>("load_session", { windowLabel });
+}
+
+export function loadWorkspace(projectRoot: string) {
+  return invoke<SessionState>("load_workspace", { projectRoot });
 }
 
 export function getOpenTarget(path: string) {

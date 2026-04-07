@@ -3,6 +3,8 @@ export interface FileNode {
   path: string;
   is_dir: boolean;
   children?: FileNode[];
+  has_children?: boolean;
+  children_loaded?: boolean;
 }
 
 export type GitFileStatus = string | null;
@@ -18,6 +20,7 @@ export interface EditorDocument {
   originalContent: string;
   isDirty: boolean;
   isLoading: boolean;
+  loadError?: string | null;
 }
 
 export interface SearchResult {
@@ -25,6 +28,12 @@ export interface SearchResult {
   line_number: number;
   line_content: string;
   matched_fragment: string;
+}
+
+export interface SearchOptions {
+  case_sensitive?: boolean;
+  whole_word?: boolean;
+  regex?: boolean;
 }
 
 export type BottomPanelTab = "diff" | "log" | "blame";
@@ -45,6 +54,7 @@ export interface Commit {
 
 export interface ChangedFile {
   path: string;
+  old_path?: string | null;
   status: string; // M, A, D, R, C, U, ?
 }
 
@@ -92,6 +102,7 @@ export interface FileBlame {
 // Stage types
 export interface StagedFile {
   path: string;
+  old_path?: string | null;
   status: string;
 }
 
@@ -102,11 +113,26 @@ export interface RecentProject {
   last_opened: number;
 }
 
+export interface EditorViewStateSnapshot {
+  selection_anchor: number;
+  scroll_top: number;
+}
+
+export type AutoSaveMode = "off" | "after_delay";
+
 export interface SessionState {
   project_root: string | null;
   open_tabs: string[];
+  pinned_tab_paths: string[];
+  editor_view_states: Record<string, EditorViewStateSnapshot>;
+  auto_save_mode: AutoSaveMode;
   active_tab_path: string;
   open_folders: string[];
+  recent_file_paths: string[];
+  selected_tree_path: string;
+  bottom_panel_tab: BottomPanelTab;
+  is_bottom_panel_open: boolean;
+  bottom_panel_height: number;
 }
 
 // Navigation history

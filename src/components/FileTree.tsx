@@ -8,7 +8,8 @@ interface FileTreeProps {
   node: FileNode;
   depth: number;
   openFolders: Set<string>;
-  toggleFolder: (p: string) => void;
+  loadingFolders?: Set<string>;
+  toggleFolder: (p: string) => Promise<void> | void;
   selectedPath: string;
   projectRoot?: string | null;
   gitStatusByPath?: Record<string, GitFileStatus>;
@@ -21,6 +22,7 @@ export function FileTree({
   node,
   depth,
   openFolders,
+  loadingFolders,
   toggleFolder,
   selectedPath,
   projectRoot,
@@ -55,6 +57,8 @@ export function FileTree({
   }
 
   const isOpen = openFolders.has(node.path);
+  const isLoading = loadingFolders?.has(node.path);
+  const showChevron = node.has_children ?? !!node.children?.length;
   return (
     <>
       <li
@@ -62,20 +66,23 @@ export function FileTree({
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => {
           onSelectPath(node.path, true);
-          toggleFolder(node.path);
+          void toggleFolder(node.path);
         }}
         onContextMenu={(e) => onContextMenu?.(node.path, true, e)}
       >
-        <span className="tree-chevron">{isOpen ? "▼" : "▶"}</span>
+        <span className="tree-chevron">
+          {isLoading ? "…" : showChevron ? (isOpen ? "▼" : "▶") : "•"}
+        </span>
         <span className="tree-label">{node.name}</span>
       </li>
-      {isOpen &&
+      {isOpen && node.children_loaded !== false &&
         node.children?.map((child) => (
           <FileTree
             key={child.path}
             node={child}
             depth={depth + 1}
             openFolders={openFolders}
+            loadingFolders={loadingFolders}
             toggleFolder={toggleFolder}
             selectedPath={selectedPath}
             projectRoot={projectRoot}
