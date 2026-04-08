@@ -16,6 +16,7 @@ import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDif
 import {
   openFolder, readFile, writeFile, searchInProject,
   readImageDataUrl,
+  revealInSystem,
   getCurrentBranch, getBranches, switchBranch,
   getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles,
   getFileBlame, stageFile, unstageFile, discardFileChanges, commit, getStagedFiles,
@@ -676,6 +677,8 @@ function App() {
   const markdownPreviewScrollRef = useRef<HTMLDivElement | null>(null);
   const pendingMarkdownAnchorRef = useRef<{ path: string; id: string } | null>(null);
   const finderPreviewCacheRef = useRef(new Map<string, { content: string; unsupported: boolean }>());
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const tabContextMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceRestoreRunRef = useRef(0);
   const lastExternalFileRefreshRef = useRef(0);
   const shortcutLabel = useCallback((key: string, options?: { shift?: boolean; alt?: boolean }) => {
@@ -1053,7 +1056,14 @@ function App() {
   useEffect(() => {
     if (!contextMenu && !tabContextMenu) return;
 
-    const handlePointerDown = () => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && (
+        contextMenuRef.current?.contains(target) ||
+        tabContextMenuRef.current?.contains(target)
+      )) {
+        return;
+      }
       setContextMenu(null);
       setTabContextMenu(null);
     };
@@ -3698,6 +3708,14 @@ function App() {
     }
   }, [projectRoot, projectFileIndexLoaded, openTabs, navHistory, isSameOrDescendantPath, refreshTreeSubdirectory]);
 
+  const handleRevealInSystem = useCallback(async (path: string, isDir: boolean) => {
+    try {
+      await revealInSystem(path, isDir);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   const handleRefreshTree = useCallback(async () => {
     if (!projectRoot) return;
     try {
@@ -5266,6 +5284,7 @@ function App() {
           {/* Context Menu */}
           {contextMenu && (
             <div
+              ref={contextMenuRef}
               className="context-menu"
               style={{ left: contextMenu.x, top: contextMenu.y }}
               onPointerDown={(e) => e.stopPropagation()}
@@ -5294,6 +5313,19 @@ function App() {
                   <div className="context-menu-divider" />
                 </>
               )}
+              <div
+                className="context-menu-item"
+                onClick={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const { path, isDir } = contextMenu;
+                  setContextMenu(null);
+                  await handleRevealInSystem(path, isDir);
+                }}
+              >
+                {contextMenu.isDir ? "Open in Finder" : "Reveal in Finder"}
+              </div>
+              <div className="context-menu-divider" />
               <div
                 className="context-menu-item"
                 onClick={() => {
@@ -5436,6 +5468,7 @@ function App() {
           />
           {tabContextMenu && (
             <div
+              ref={tabContextMenuRef}
               className="context-menu"
               style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
               onPointerDown={(e) => e.stopPropagation()}

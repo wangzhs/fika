@@ -361,6 +361,60 @@ async fn write_file(path: String, content: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn reveal_in_system(path: String, is_dir: bool) -> Result<(), String> {
+    let meta = fs::metadata(&path).map_err(|e| format!("Cannot access path: {}", e))?;
+
+    if is_dir && !meta.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+
+    if !is_dir && !meta.is_file() {
+        return Err("Path is not a file".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let status = {
+        let mut command = Command::new("open");
+        if !is_dir {
+            command.arg("-R");
+        }
+        command.arg(&path).status()
+    };
+
+    #[cfg(target_os = "windows")]
+    let status = {
+        let mut command = Command::new("explorer");
+        if is_dir {
+            command.arg(&path);
+        } else {
+            command.arg(format!("/select,{}", path));
+        }
+        command.status()
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = {
+        let target = if is_dir {
+            path.clone()
+        } else {
+            Path::new(&path)
+                .parent()
+                .and_then(|parent| parent.to_str())
+                .unwrap_or(&path)
+                .to_string()
+        };
+        Command::new("xdg-open").arg(target).status()
+    };
+
+    let status = status.map_err(|e| format!("Failed to open path in system: {}", e))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("System open command failed with status: {}", status))
+    }
+}
+
+#[tauri::command]
 async fn set_unsaved_changes_flag(
     state: tauri::State<'_, CloseGuard>,
     has_unsaved_changes: bool,
@@ -1758,7 +1812,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            open_folder, read_file, read_image_data_url, write_file, set_unsaved_changes_flag, confirm_discard_file, search_in_project,
+            open_folder, read_file, read_image_data_url, write_file, reveal_in_system, set_unsaved_changes_flag, confirm_discard_file, search_in_project,
             list_project_files,
             get_current_branch, get_branches, switch_branch,
             get_git_history, get_working_tree_changes, get_file_diff, get_commit_files,

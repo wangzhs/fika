@@ -17,6 +17,10 @@ export function writeFile(path: string, content: string) {
   return invoke<void>("write_file", { path, content });
 }
 
+export function revealInSystem(path: string, isDir: boolean) {
+  return invoke<void>("reveal_in_system", { path, isDir });
+}
+
 export function setUnsavedChangesFlag(hasUnsavedChanges: boolean) {
   return invoke<void>("set_unsaved_changes_flag", { hasUnsavedChanges });
 }

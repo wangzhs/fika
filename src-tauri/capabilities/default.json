@@ -8,6 +8,14 @@
     "core:webview:allow-create-webview-window",
     "core:window:allow-create",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "$HOME/**"
+        }
+      ]
+    },
     "dialog:allow-open",
     "process:allow-restart"
   ]
