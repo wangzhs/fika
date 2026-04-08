@@ -856,6 +856,8 @@ body, html, #root {
 }
 
 .code-editor .cm-content {
+  width: fit-content;
+  min-width: 100%;
   padding-bottom: 48px;
   font-family: "JetBrains Mono", "SF Mono", "Fira Code", Consolas, monospace;
   font-size: 14px;
@@ -2008,6 +2010,34 @@ body, html, #root {
   font-size: 11px;
 }
 
+.git-sync-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid #25282c;
+  background: rgba(255, 255, 255, 0.02);
+  flex-wrap: wrap;
+}
+
+.git-sync-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.git-sync-title {
+  color: #dce2e8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.git-sync-branch {
+  color: #8f98a3;
+  font-size: 11px;
+}
+
 .git-filter-chip {
   background: #2f343a;
   border: none;
@@ -2452,6 +2482,14 @@ body, html, #root {
 
 .commit-btn:hover:not(:disabled) {
   background: #2ea043;
+}
+
+.commit-btn.commit-btn-secondary {
+  background: #0e639c;
+}
+
+.commit-btn.commit-btn-secondary:hover:not(:disabled) {
+  background: #1177bb;
 }
 
 .commit-btn:disabled {

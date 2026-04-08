@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FolderResult, SearchResult, SearchOptions, FileBlame, StagedFile, RecentProject, SessionState, FileNode } from "./types";
+import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FolderResult, SearchResult, SearchOptions, FileBlame, StagedFile, RecentProject, SessionState, FileNode, GitSyncStatus } from "./types";
 
 export function openFolder() {
   return invoke<FolderResult | null>("open_folder");
@@ -42,6 +42,10 @@ export function getBranches(path: string) {
   return invoke<Branch[]>("get_branches", { path });
 }
 
+export function getGitSyncStatus(path: string) {
+  return invoke<GitSyncStatus>("get_git_sync_status", { path });
+}
+
 export function switchBranch(path: string, branch: string) {
   return invoke<void>("switch_branch", { path, branch });
 }
@@ -82,6 +86,10 @@ export function discardFileChanges(path: string, file: string) {
 
 export function commit(path: string, message: string) {
   return invoke<string>("commit", { path, message });
+}
+
+export function push(path: string) {
+  return invoke<string>("push", { path });
 }
 
 export function getStagedFiles(path: string) {

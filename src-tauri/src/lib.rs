@@ -68,6 +68,13 @@ pub struct Branch {
 }
 
 #[derive(Serialize, Clone)]
+pub struct GitSyncStatus {
+    pub has_upstream: bool,
+    pub ahead: usize,
+    pub behind: usize,
+}
+
+#[derive(Serialize, Clone)]
 pub struct Commit {
     pub hash: String,
     pub short_hash: String,
@@ -1148,6 +1155,76 @@ async fn commit(path: String, message: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn get_git_sync_status(path: String) -> Result<GitSyncStatus, String> {
+    if !is_git_repo(&path) {
+        return Ok(GitSyncStatus {
+            has_upstream: false,
+            ahead: 0,
+            behind: 0,
+        });
+    }
+
+    let upstream = run_git_command(
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        &path,
+    );
+
+    if upstream.is_err() {
+        return Ok(GitSyncStatus {
+            has_upstream: false,
+            ahead: 0,
+            behind: 0,
+        });
+    }
+
+    let counts = run_git_command(&["rev-list", "--left-right", "--count", "@{u}...HEAD"], &path)?;
+    let mut parts = counts.split_whitespace();
+    let behind = parts
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let ahead = parts
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    Ok(GitSyncStatus {
+        has_upstream: true,
+        ahead,
+        behind,
+    })
+}
+
+#[tauri::command]
+async fn push(path: String) -> Result<String, String> {
+    if !is_git_repo(&path) {
+        return Err("Not a git repository".to_string());
+    }
+
+    let branch = run_git_command(&["rev-parse", "--abbrev-ref", "HEAD"], &path)?
+        .trim()
+        .to_string();
+
+    if branch.is_empty() || branch == "HEAD" {
+        return Err("Cannot push while HEAD is detached".to_string());
+    }
+
+    let has_upstream = run_git_command(
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        &path,
+    )
+    .is_ok();
+
+    if has_upstream {
+        run_git_command(&["push"], &path)?;
+    } else {
+        run_git_command(&["push", "-u", "origin", &branch], &path)?;
+    }
+
+    Ok(branch)
+}
+
+#[tauri::command]
 async fn get_staged_files(path: String) -> Result<Vec<StagedFile>, String> {
     if !is_git_repo(&path) {
         return Ok(vec![]);
@@ -1814,9 +1891,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_folder, read_file, read_image_data_url, write_file, reveal_in_system, set_unsaved_changes_flag, confirm_discard_file, search_in_project,
             list_project_files,
-            get_current_branch, get_branches, switch_branch,
+            get_current_branch, get_branches, get_git_sync_status, switch_branch,
             get_git_history, get_working_tree_changes, get_file_diff, get_commit_files,
-            get_file_blame, stage_file, unstage_file, discard_file_changes, commit, get_staged_files,
+            get_file_blame, stage_file, unstage_file, discard_file_changes, commit, push, get_staged_files,
             create_file, create_directory, rename_path, delete_path, refresh_tree,
             save_recent_projects, load_recent_projects, save_session, load_session, load_workspace, get_open_target,
             check_for_updates, install_update

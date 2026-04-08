@@ -44,6 +44,12 @@ export interface Branch {
   is_current: boolean;
 }
 
+export interface GitSyncStatus {
+  has_upstream: boolean;
+  ahead: number;
+  behind: number;
+}
+
 export interface Commit {
   hash: string;
   short_hash: string;

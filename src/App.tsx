@@ -12,14 +12,14 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { relaunch } from "@tauri-apps/plugin-process";
 import "./App.css";
-import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab, FileBlame, StagedFile, RecentProject, NavigationEntry, SessionState, EditorViewStateSnapshot, AutoSaveMode } from "./types";
+import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab, FileBlame, StagedFile, RecentProject, NavigationEntry, SessionState, EditorViewStateSnapshot, AutoSaveMode, GitSyncStatus } from "./types";
 import {
   openFolder, readFile, writeFile, searchInProject,
   readImageDataUrl,
   revealInSystem,
-  getCurrentBranch, getBranches, switchBranch,
+  getCurrentBranch, getBranches, getGitSyncStatus, switchBranch,
   getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles,
-  getFileBlame, stageFile, unstageFile, discardFileChanges, commit, getStagedFiles,
+  getFileBlame, stageFile, unstageFile, discardFileChanges, commit, push, getStagedFiles,
   createFile, createDirectory, renamePath, deletePath, refreshTree,
   listProjectFiles,
   saveRecentProjects, loadRecentProjects, saveSession, loadSession, loadWorkspace, setUnsavedChangesFlag, getOpenTarget,
@@ -770,6 +770,7 @@ function App() {
   // Git state
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [gitSyncStatus, setGitSyncStatus] = useState<GitSyncStatus | null>(null);
   const [gitHistory, setGitHistory] = useState<Commit[]>([]);
   const [gitHistoryFilePath, setGitHistoryFilePath] = useState<string | null>(null);
   const [gitChanges, setGitChanges] = useState<ChangedFile[]>([]);
@@ -798,6 +799,7 @@ function App() {
   const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
   const [commitMessage, setCommitMessage] = useState("");
   const [isCommitting, setIsCommitting] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
 
   // Persistence state
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
@@ -1028,7 +1030,9 @@ function App() {
     if (!container) return;
     const target = container.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
     if (!target) return;
-    const top = target.offsetTop - 24;
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const top = container.scrollTop + (targetRect.top - containerRect.top) - 12;
     container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
   }, []);
   useEffect(() => {
@@ -2558,6 +2562,7 @@ function App() {
       keymap.of([
         {
           key: "Mod-d",
+          preventDefault: true,
           run: (view) => duplicateCurrentLine(view),
         },
         {
@@ -2586,6 +2591,20 @@ function App() {
         },
       ]),
     [activeTabPath, handleCloseTab, isMac, isMarkdownTab, toggleActiveMarkdownPreview]
+  );
+  const editorDomHandlers = useMemo(
+    () =>
+      EditorView.domEventHandlers({
+        keydown: (event, view) => {
+          if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "d") {
+            event.preventDefault();
+            event.stopPropagation();
+            return duplicateCurrentLine(view);
+          }
+          return false;
+        },
+      }),
+    []
   );
 
   useEffect(() => {
@@ -2618,6 +2637,7 @@ function App() {
       setIsGitRepo(false);
       setCurrentBranch(null);
       setBranches([]);
+      setGitSyncStatus(null);
       setGitHistory([]);
       setGitChanges([]);
       return;
@@ -2634,11 +2654,12 @@ function App() {
     }
 
     // Fetch other git data independently - failures in one don't affect others
-    const [branchesResult, historyResult, changesResult, stagedResult] = await Promise.allSettled([
+    const [branchesResult, historyResult, changesResult, stagedResult, syncStatusResult] = await Promise.allSettled([
       getBranches(projectRoot),
       getGitHistory(projectRoot, 50),
       getWorkingTreeChanges(projectRoot),
       getStagedFiles(projectRoot),
+      getGitSyncStatus(projectRoot),
     ]);
 
     if (branchesResult.status === 'fulfilled') {
@@ -2667,6 +2688,12 @@ function App() {
       setStagedFiles(stagedResult.value);
     } else {
       setStagedFiles([]);
+    }
+
+    if (syncStatusResult.status === "fulfilled") {
+      setGitSyncStatus(syncStatusResult.value);
+    } else {
+      setGitSyncStatus(null);
     }
 
     const stagedFilesValue = stagedResult.status === 'fulfilled' ? stagedResult.value : [];
@@ -3503,6 +3530,22 @@ function App() {
     }
   }, [projectRoot, commitMessage, refreshGitData]);
 
+  const handlePush = useCallback(async () => {
+    if (!projectRoot || !currentBranch || (gitSyncStatus?.has_upstream && gitSyncStatus.ahead === 0)) return;
+    setIsPushing(true);
+    try {
+      await push(projectRoot);
+      await refreshGitData();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setIsPushing(false);
+    }
+  }, [currentBranch, gitSyncStatus, projectRoot, refreshGitData]);
+
+  const canPush = !!currentBranch && !isPushing && (!gitSyncStatus || !gitSyncStatus.has_upstream || gitSyncStatus.ahead > 0);
+  const pushButtonLabel = isPushing ? "Pushing..." : canPush ? "Push" : "Up to date";
+
   // Persistence handlers
   const removeRecentProject = useCallback((path: string) => {
     setRecentProjects(prev => {
@@ -4045,11 +4088,31 @@ function App() {
       const isTabSwitcher =
         e.ctrlKey && !e.metaKey && e.key === "Tab";
       const target = e.target as HTMLElement | null;
+      const activeElement = document.activeElement as HTMLElement | null;
+      const isEditorFocused = !!(
+        target?.closest(".cm-editor") ||
+        activeElement?.closest(".cm-editor")
+      );
       const isTypingTarget = !!target && (
         target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
-        target.isContentEditable
+        target.isContentEditable ||
+        isEditorFocused
       );
+
+      // Let CodeMirror own Mod+D when the editor is focused.
+      if (isCompareFile && isEditorFocused) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === "function") {
+          e.stopImmediatePropagation();
+        }
+        const view = editorRef.current?.view;
+        if (view) {
+          duplicateCurrentLine(view);
+        }
+        return;
+      }
 
       if (commandPaletteOpen) {
         switch (e.key) {
@@ -5750,6 +5813,7 @@ function App() {
                   height="100%"
                   theme={dracula}
                   extensions={[
+                    editorDomHandlers,
                     editorKeybindings,
                     ...langFromPath(activeTab.path),
                     ...modifiedLineExtensions,
@@ -6020,6 +6084,21 @@ function App() {
                     </div>
                     <div className="git-toolbar-hint">↑↓ select, Enter open diff</div>
                   </div>
+                  {currentBranch && (
+                    <div className="git-sync-bar">
+                      <div className="git-sync-summary">
+                        <span className="git-sync-title">Remote Sync</span>
+                        <span className="git-sync-branch">Current branch: {currentBranch}</span>
+                      </div>
+                      <button
+                        className="commit-btn commit-btn-secondary"
+                        onClick={() => void handlePush()}
+                        disabled={!canPush}
+                      >
+                        {pushButtonLabel}
+                      </button>
+                    </div>
+                  )}
                   {/* Staged Files Section */}
                   <div className="changes-section">
                     <div className="changes-section-header">
