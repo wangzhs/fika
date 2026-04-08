@@ -91,7 +91,10 @@ export function FileTree({
                 onSelectPath(visibleNode.path, false);
                 onSelectFile(visibleNode.path, undefined, "file-tree-click");
               }}
-              onContextMenu={(e) => onContextMenu?.(visibleNode.path, false, e)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onContextMenu?.(visibleNode.path, false, e);
+              }}
             >
               <span className={`tree-bullet ${gitStatus ? `git-status-${gitStatus}` : ""}`} />
               <span className="tree-label">{visibleNode.name}</span>
@@ -112,7 +115,10 @@ export function FileTree({
               onSelectPath(visibleNode.path, true);
               void toggleFolder(visibleNode.path);
             }}
-            onContextMenu={(e) => onContextMenu?.(visibleNode.path, true, e)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onContextMenu?.(visibleNode.path, true, e);
+            }}
           >
             <span className="tree-chevron">
               {isLoading ? "…" : showChevron ? (isOpen ? "▼" : "▶") : "•"}

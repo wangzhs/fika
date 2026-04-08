@@ -1,3 +1,4 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -185,6 +186,7 @@ struct AvailableUpdate {
 const MENU_OPEN_FOLDER: &str = "file_open_folder";
 const MENU_OPEN_RECENT: &str = "file_open_recent";
 const MENU_OPEN_FOLDER_NEW_WINDOW: &str = "file_open_folder_new_window";
+const MENU_CLOSE_WINDOW: &str = "file_close_window";
 const MENU_CLOSE_TAB: &str = "file_close_tab";
 const MENU_CHECK_FOR_UPDATES: &str = "help_check_for_updates";
 
@@ -317,6 +319,40 @@ async fn read_file(path: String) -> Result<String, String> {
 
     String::from_utf8(bytes)
         .map_err(|e| format!("File encoding is not valid UTF-8: {}", e))
+}
+
+#[tauri::command]
+async fn read_image_data_url(path: String) -> Result<String, String> {
+    let meta = fs::metadata(&path).map_err(|e| format!("Cannot access file: {}", e))?;
+
+    if !meta.is_file() {
+        return Err("Path is not a file".to_string());
+    }
+
+    if meta.len() > 10 * 1024 * 1024 {
+        return Err("Image is too large (>10MB)".to_string());
+    }
+
+    let mime = match Path::new(&path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("bmp") => "image/bmp",
+        Some("ico") => "image/x-icon",
+        Some("avif") => "image/avif",
+        _ => return Err("Unsupported image format".to_string()),
+    };
+
+    let bytes = fs::read(&path).map_err(|e| format!("Failed to read image: {}", e))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{};base64,{}", mime, encoded))
 }
 
 #[tauri::command]
@@ -1540,6 +1576,13 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
             )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, MENU_CLOSE_TAB, "Close Tab", true, Some("CmdOrCtrl+W"))?,
+            &MenuItem::with_id(
+                app,
+                MENU_CLOSE_WINDOW,
+                "Close Window",
+                true,
+                Some("CmdOrCtrl+Shift+W"),
+            )?,
         ],
     )?;
 
@@ -1606,6 +1649,18 @@ fn eval_in_focused_window(app: &tauri::AppHandle, script: &str) {
     }
 }
 
+fn close_focused_window(app: &tauri::AppHandle) {
+    let target = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.is_focused().unwrap_or(false))
+        .or_else(|| app.webview_windows().into_values().next());
+
+    if let Some(window) = target {
+        let _ = window.close();
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn show_and_focus_primary_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     let target = app
@@ -1642,6 +1697,7 @@ pub fn run() {
                 eval_in_focused_window(app, "window.__FIKA_OPEN_FOLDER_NEW_WINDOW__?.()")
             }
             MENU_CLOSE_TAB => eval_in_focused_window(app, "window.__FIKA_CLOSE_ACTIVE_TAB__?.()"),
+            MENU_CLOSE_WINDOW => close_focused_window(app),
             MENU_CHECK_FOR_UPDATES => {
                 eval_in_focused_window(app, "window.__FIKA_CHECK_FOR_UPDATES__?.()")
             }
@@ -1654,6 +1710,12 @@ pub fn run() {
                     api.prevent_close();
                     if let Some(webview_window) = window.app_handle().get_webview_window(window.label()) {
                         let _ = webview_window.eval("window.__FIKA_CLEAR_PROJECT__?.()");
+                        #[cfg(target_os = "macos")]
+                        {
+                            if webview_window.is_fullscreen().unwrap_or(false) {
+                                let _ = webview_window.set_fullscreen(false);
+                            }
+                        }
                     }
                     let _ = window.hide();
                     return;
@@ -1696,7 +1758,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            open_folder, read_file, write_file, set_unsaved_changes_flag, confirm_discard_file, search_in_project,
+            open_folder, read_file, read_image_data_url, write_file, set_unsaved_changes_flag, confirm_discard_file, search_in_project,
             list_project_files,
             get_current_branch, get_branches, switch_branch,
             get_git_history, get_working_tree_changes, get_file_diff, get_commit_files,

@@ -1,4 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import type { ReactNode } from "react";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { dracula } from "@uiw/codemirror-theme-dracula";
 import { EditorView, Decoration, gutter, GutterMarker, keymap } from "@codemirror/view";
@@ -14,6 +15,7 @@ import "./App.css";
 import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab, FileBlame, StagedFile, RecentProject, NavigationEntry, SessionState, EditorViewStateSnapshot, AutoSaveMode } from "./types";
 import {
   openFolder, readFile, writeFile, searchInProject,
+  readImageDataUrl,
   getCurrentBranch, getBranches, switchBranch,
   getGitHistory, getWorkingTreeChanges, getFileDiff, getCommitFiles,
   getFileBlame, stageFile, unstageFile, discardFileChanges, commit, getStagedFiles,
@@ -25,7 +27,6 @@ import {
 import { FileTree } from "./components/FileTree";
 import { TabBar } from "./components/TabBar";
 import { findFirstUnloadedOpenFolder, findNodeByPath, mergeLoadedTree, removeNodeByPath, replaceNodeByPath } from "./utils/tree";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emitTo } from "@tauri-apps/api/event";
@@ -117,8 +118,12 @@ function getParentDirPath(path: string, fallback: string) {
   const normalizedFallback = normalizeFilePath(fallback).replace(/\/$/, "");
   const lastSlashIndex = normalizedPath.lastIndexOf("/");
 
-  if (lastSlashIndex <= 0) {
+  if (lastSlashIndex < 0) {
     return normalizedFallback;
+  }
+
+  if (lastSlashIndex === 0) {
+    return "/";
   }
 
   const parentPath = normalizedPath.slice(0, lastSlashIndex);
@@ -334,6 +339,93 @@ function isImagePath(path: string) {
   return /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(path);
 }
 
+const markdownImageDataUrlCache = new Map<string, string>();
+
+function MarkdownImage({
+  src,
+  alt,
+  baseFilePath,
+  projectRoot,
+}: {
+  src?: string | null;
+  alt?: string;
+  baseFilePath: string;
+  projectRoot: string | null;
+}) {
+  const resolvedPath = useMemo(
+    () => (src ? resolveMarkdownResourcePath(baseFilePath, src, projectRoot) : null),
+    [baseFilePath, projectRoot, src]
+  );
+  const [imageSrc, setImageSrc] = useState<string>(() => {
+    if (!resolvedPath) return src ?? "";
+    return markdownImageDataUrlCache.get(resolvedPath) ?? "";
+  });
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!src) {
+      setImageSrc("");
+      setLoadError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!resolvedPath) {
+      setImageSrc(src);
+      setLoadError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const cached = markdownImageDataUrlCache.get(resolvedPath);
+    if (cached) {
+      setImageSrc(cached);
+      setLoadError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setImageSrc("");
+    setLoadError(null);
+
+    void readImageDataUrl(resolvedPath)
+      .then((dataUrl) => {
+        if (cancelled) return;
+        markdownImageDataUrlCache.set(resolvedPath, dataUrl);
+        setImageSrc(dataUrl);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setLoadError(`${resolvedPath}\n${String(error)}`);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedPath, src]);
+
+  if (loadError) {
+    return (
+      <div className="md-image-error">
+        <strong>Image failed to load</strong>
+        <div>{alt ?? src ?? resolvedPath ?? "Unknown image"}</div>
+        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{loadError}</div>
+      </div>
+    );
+  }
+
+  if (!imageSrc) {
+    return <div className="md-image-loading">Loading image...</div>;
+  }
+
+  return <img className="md-image" src={imageSrc} alt={alt ?? ""} title={resolvedPath ?? src ?? ""} />;
+}
+
 function duplicateCurrentLine(view: EditorView) {
   const { state } = view;
   const line = state.doc.lineAt(state.selection.main.head);
@@ -400,19 +492,69 @@ function isExternalUrl(value: string) {
   return /^(?:[a-z]+:)?\/\//i.test(value) || value.startsWith("mailto:") || value.startsWith("tel:");
 }
 
-function resolveMarkdownResourcePath(baseFilePath: string, target: string, projectRoot: string | null) {
+function decodeUriRecursively(value: string, attempts = 3) {
+  let current = value;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) break;
+      current = decoded;
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+function normalizeLocalFilePath(value: string) {
+  const normalized = normalizeFilePath(value);
+  return normalized.replace(/^\/{2,}/, "/");
+}
+
+function normalizeInputFilePath(value: string) {
+  const decodedValue = decodeUriRecursively(value.trim());
+
+  if (decodedValue.startsWith("asset://localhost/")) {
+    return normalizeLocalFilePath(decodedValue.slice("asset://localhost".length));
+  }
+
+  if (decodedValue.startsWith("file://")) {
+    return normalizeLocalFilePath(decodedValue.slice("file://".length));
+  }
+
+  return normalizeFilePath(decodedValue);
+}
+
+function normalizeStoredPaths(paths: string[] | undefined | null) {
+  return (paths ?? []).filter(Boolean).map((path) => normalizeInputFilePath(path));
+}
+
+function resolveMarkdownResourcePath(baseFilePath: string, target: string, _projectRoot: string | null) {
   const trimmed = target.trim();
-  if (!trimmed || trimmed.startsWith("#") || isExternalUrl(trimmed) || trimmed.startsWith("data:")) {
+  const decodedTarget = decodeUriRecursively(trimmed);
+
+  if (!decodedTarget || decodedTarget.startsWith("#") || decodedTarget.startsWith("data:")) {
     return null;
   }
 
-  if (trimmed.startsWith("/")) {
-    if (!projectRoot) return null;
-    return `${normalizeFilePath(projectRoot).replace(/\/$/, "")}${trimmed}`;
+  if (decodedTarget.startsWith("asset://localhost/")) {
+    return normalizeInputFilePath(decodedTarget);
+  }
+
+  if (decodedTarget.startsWith("file://")) {
+    return normalizeInputFilePath(decodedTarget);
+  }
+
+  if (isExternalUrl(decodedTarget)) {
+    return null;
+  }
+
+  if (decodedTarget.startsWith("/")) {
+    return normalizeFilePath(decodedTarget);
   }
 
   const baseDir = getParentDirPath(baseFilePath, baseFilePath);
-  const parts = normalizeFilePath(`${baseDir}/${trimmed}`).split("/");
+  const parts = normalizeFilePath(`${baseDir}/${decodedTarget}`).split("/");
   const resolved: string[] = [];
 
   for (const part of parts) {
@@ -435,6 +577,64 @@ function splitMarkdownHref(target: string) {
     path: pathPart ?? "",
     hash: hash ? decodeURIComponent(hash) : "",
   };
+}
+
+function normalizeMarkdownPreviewContent(content: string) {
+  return content.replace(/(!?\[[^\]]*\])\(([^()\n]*\s[^()\n]*)\)/g, (fullMatch, label, target) => {
+    const trimmedTarget = target.trim();
+    if (!trimmedTarget) return fullMatch;
+    if (trimmedTarget.startsWith("<") && trimmedTarget.endsWith(">")) return fullMatch;
+    if (trimmedTarget.includes('"') || trimmedTarget.includes("'")) return fullMatch;
+    return `${label}(<${trimmedTarget}>)`;
+  });
+}
+
+function extractTextFromReactNode(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractTextFromReactNode).join("");
+  if (!node || typeof node !== "object") return "";
+  if ("props" in node && node.props && typeof node.props === "object" && "children" in node.props) {
+    return extractTextFromReactNode((node.props as { children?: ReactNode }).children ?? "");
+  }
+  return "";
+}
+
+function extractMarkdownHeadings(content: string) {
+  const headingCounts = new Map<string, number>();
+  const headings: Array<{ level: number; text: string; id: string }> = [];
+  const lines = content.split("\n");
+  let inFence = false;
+  let fenceMarker = "";
+
+  for (const line of lines) {
+    const fenceMatch = /^\s*(```+|~~~+)/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = marker;
+      } else if (fenceMarker === marker) {
+        inFence = false;
+        fenceMarker = "";
+      }
+      continue;
+    }
+
+    if (inFence) continue;
+
+    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (!match) continue;
+    const level = match[1].length;
+    const text = match[2].replace(/\s+#*$/, "").trim();
+    if (!text) continue;
+    const baseSlug = slugifyHeading(text) || `section-${headingCounts.size + 1}`;
+    const seen = headingCounts.get(baseSlug) ?? 0;
+    headingCounts.set(baseSlug, seen + 1);
+    const id = seen === 0 ? baseSlug : `${baseSlug}-${seen + 1}`;
+    headings.push({ level, text, id });
+  }
+
+  return headings;
 }
 
 type CommandPaletteGroup = "Files" | "Search" | "Editor" | "Git" | "Workspace" | "View";
@@ -477,6 +677,7 @@ function App() {
   const pendingMarkdownAnchorRef = useRef<{ path: string; id: string } | null>(null);
   const finderPreviewCacheRef = useRef(new Map<string, { content: string; unsupported: boolean }>());
   const workspaceRestoreRunRef = useRef(0);
+  const lastExternalFileRefreshRef = useRef(0);
   const shortcutLabel = useCallback((key: string, options?: { shift?: boolean; alt?: boolean }) => {
     if (isMac) {
       return `${options?.shift ? "⇧" : ""}${options?.alt ? "⌥" : ""}⌘${key}`;
@@ -795,29 +996,16 @@ function App() {
     () => Boolean(activeTab?.path && markdownPreviewByPath[activeTab.path]),
     [activeTab?.path, markdownPreviewByPath]
   );
-  const activeImageSrc = useMemo(
-    () => (isImageTab && activeTab ? convertFileSrc(activeTab.path) : null),
-    [activeTab, isImageTab]
+  const [activeImageSrc, setActiveImageSrc] = useState<string | null>(null);
+  const [renderedMarkdownHeadings, setRenderedMarkdownHeadings] = useState<Array<{ level: number; text: string; id: string }>>([]);
+  const markdownPreviewContent = useMemo(
+    () => (activeTab && isMarkdownTab ? normalizeMarkdownPreviewContent(activeTab.content) : ""),
+    [activeTab, isMarkdownTab]
   );
   const markdownHeadings = useMemo(() => {
     if (!activeTab || !isMarkdownTab) return [];
-    const headingCounts = new Map<string, number>();
-    return activeTab.content
-      .split("\n")
-      .map((line) => {
-        const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
-        if (!match) return null;
-        const level = match[1].length;
-        const text = match[2].replace(/\s+#*$/, "").trim();
-        if (!text) return null;
-        const baseSlug = slugifyHeading(text) || `section-${headingCounts.size + 1}`;
-        const seen = headingCounts.get(baseSlug) ?? 0;
-        headingCounts.set(baseSlug, seen + 1);
-        const id = seen === 0 ? baseSlug : `${baseSlug}-${seen + 1}`;
-        return { level, text, id };
-      })
-      .filter((heading): heading is { level: number; text: string; id: string } => Boolean(heading));
-  }, [activeTab, isMarkdownTab]);
+    return extractMarkdownHeadings(markdownPreviewContent);
+  }, [activeTab, isMarkdownTab, markdownPreviewContent]);
   const setActiveMarkdownPreviewOpen = useCallback((open: boolean) => {
     if (!activeTab?.path) return;
     setMarkdownPreviewByPath((prev) => ({
@@ -840,6 +1028,39 @@ function App() {
     const top = target.offsetTop - 24;
     container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
   }, []);
+  useEffect(() => {
+    if (!isMarkdownTab || !isActiveMarkdownPreviewOpen) {
+      setRenderedMarkdownHeadings([]);
+      return;
+    }
+
+    const container = markdownPreviewScrollRef.current;
+    if (!container) return;
+
+    const collect = () => {
+      const headings = Array.from(container.querySelectorAll<HTMLElement>(".md-heading")).map((element) => ({
+        level: Number(element.tagName.replace("H", "")) || 1,
+        text: element.textContent?.trim() ?? "",
+        id: element.id,
+      })).filter((heading) => heading.text && heading.id);
+      setRenderedMarkdownHeadings(headings);
+    };
+
+    collect();
+    const frameId = window.requestAnimationFrame(collect);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeTab?.path, isActiveMarkdownPreviewOpen, isMarkdownTab, markdownPreviewContent]);
+  useEffect(() => {
+    if (!contextMenu && !tabContextMenu) return;
+
+    const handlePointerDown = () => {
+      setContextMenu(null);
+      setTabContextMenu(null);
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    return () => window.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [contextMenu, tabContextMenu]);
   const getEditorContent = useCallback(
     () => editorRef.current?.view?.state.doc.toString() ?? null,
     []
@@ -1125,10 +1346,39 @@ function App() {
 
   useEffect(() => {
     setImagePreviewError(null);
+    setActiveImageSrc(null);
     setImageZoom(100);
     setImageFitMode("fit");
     setImageNaturalSize(null);
   }, [activeTabPath]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!isImageTab || !activeTab?.path) {
+      setActiveImageSrc(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setActiveImageSrc(null);
+    setImagePreviewError(null);
+
+    void readImageDataUrl(activeTab.path)
+      .then((dataUrl) => {
+        if (cancelled) return;
+        setActiveImageSrc(dataUrl);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setImagePreviewError(`${activeTab.path}\n${String(error)}`);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab?.path, isImageTab]);
 
   useEffect(() => {
     if (!activeTab || isImageTab || (isMarkdownTab && isActiveMarkdownPreviewOpen)) return;
@@ -1190,6 +1440,58 @@ function App() {
     });
     view.focus();
   }, []);
+
+  const getEditorSelectionState = useCallback(() => {
+    const view = editorRef.current?.view;
+    if (!view) return null;
+    const selection = view.state.selection.main;
+    const from = Math.min(selection.from, selection.to);
+    const to = Math.max(selection.from, selection.to);
+    return {
+      from,
+      to,
+      text: from === to ? "" : view.state.doc.sliceString(from, to),
+    };
+  }, []);
+
+  const findMatchIndexForSelection = useCallback((
+    matches: Array<{ from: number; to: number }>,
+    selection: { from: number; to: number } | null
+  ) => {
+    if (!selection || matches.length === 0) return matches.length > 0 ? 0 : -1;
+
+    const exactIndex = matches.findIndex(
+      (match) => match.from === selection.from && match.to === selection.to
+    );
+    if (exactIndex >= 0) return exactIndex;
+
+    const containingIndex = matches.findIndex(
+      (match) => selection.from >= match.from && selection.from <= match.to
+    );
+    if (containingIndex >= 0) return containingIndex;
+
+    const nearestIndex = matches.findIndex((match) => match.from >= selection.from);
+    if (nearestIndex >= 0) return nearestIndex;
+
+    return matches.length > 0 ? matches.length - 1 : -1;
+  }, []);
+
+  useEffect(() => {
+    if (!inFileSearchOpen || !inFileQuery.trim() || inFileSearchError || inFileMatches.length === 0) {
+      return;
+    }
+
+    const selection = getEditorSelectionState();
+    const nextIndex = findMatchIndexForSelection(inFileMatches, selection);
+    setCurrentMatchIndex((current) => (current === nextIndex ? current : nextIndex));
+  }, [
+    findMatchIndexForSelection,
+    getEditorSelectionState,
+    inFileMatches,
+    inFileQuery,
+    inFileSearchError,
+    inFileSearchOpen,
+  ]);
 
   // In-file search navigation
   const goToNextMatch = useCallback(() => {
@@ -1374,10 +1676,10 @@ function App() {
       setProjectFileIndexLoading(false);
       setOpenTabs([]);
       setActiveTabPath("");
-      setSelectedTreePath(workspaceState.selected_tree_path || result.tree.path);
-      setRecentFilePaths(workspaceState.recent_file_paths ?? []);
+      setSelectedTreePath(workspaceState.selected_tree_path ? normalizeInputFilePath(workspaceState.selected_tree_path) : result.tree.path);
+      setRecentFilePaths(normalizeStoredPaths(workspaceState.recent_file_paths));
       setSelectedGitFilePath(null);
-      setOpenFolders(new Set(workspaceState.open_folders.length > 0 ? workspaceState.open_folders : [result.tree.path]));
+      setOpenFolders(new Set(normalizeStoredPaths(workspaceState.open_folders).length > 0 ? normalizeStoredPaths(workspaceState.open_folders) : [result.tree.path]));
       setBottomPanelTab(workspaceState.bottom_panel_tab);
       setIsBottomPanelOpen(workspaceState.is_bottom_panel_open);
       setBottomPanelHeight(workspaceState.bottom_panel_height);
@@ -1409,6 +1711,12 @@ function App() {
       projectPath = result.root;
     }
 
+    const sourceWindow = getCurrentWindow();
+    const [isFullscreen, isMaximized] = await Promise.all([
+      sourceWindow.isFullscreen().catch(() => false),
+      sourceWindow.isMaximized().catch(() => false),
+    ]);
+
     const label = `project-${Date.now()}`;
     const storageKey = `fika:pending-project:${label}`;
     localStorage.setItem(storageKey, projectPath);
@@ -1419,10 +1727,17 @@ function App() {
       height: 900,
       minWidth: 1100,
       minHeight: 720,
+      maximized: !isFullscreen && isMaximized,
+      fullscreen: isFullscreen,
       url: window.location.href,
     });
 
     nextWindow.once("tauri://created", () => {
+      if (isFullscreen) {
+        void nextWindow.setFullscreen(true).catch(() => {});
+      } else if (isMaximized) {
+        void nextWindow.maximize().catch(() => {});
+      }
       setTimeout(() => {
         void emitTo({ kind: "WebviewWindow", label }, "fika://open-project-path", projectPath);
       }, 250);
@@ -1541,68 +1856,69 @@ function App() {
   const handleOpenFile = useCallback(
     async (path: string, lineNumber?: number, _source = "unknown") => {
       if (!path) return;
-      const existing = openTabs.find((t) => t.path === path);
+      const nextPath = normalizeInputFilePath(path);
+      const existing = openTabs.find((t) => t.path === nextPath);
       if (existing) {
         rememberEditorViewState(activeTabPath);
-        setActiveTabPath(path);
-        updateRecentFiles(path);
-        addToNavHistory(path, lineNumber);
+        setActiveTabPath(nextPath);
+        updateRecentFiles(nextPath);
+        addToNavHistory(nextPath, lineNumber);
         // If line number specified, scroll to it after a short delay to allow editor to render
         if (lineNumber !== undefined && lineNumber > 0) {
           setTimeout(() => scrollToLine(lineNumber), 50);
         }
         return;
       }
-      if (pendingOpenPathsRef.current.has(path)) {
+      if (pendingOpenPathsRef.current.has(nextPath)) {
         rememberEditorViewState(activeTabPath);
-        setActiveTabPath(path);
+        setActiveTabPath(nextPath);
         return;
       }
-      if (isImagePath(path)) {
+      if (isImagePath(nextPath)) {
         const imageTab: EditorDocument = {
-          path,
+          path: nextPath,
           content: "",
           originalContent: "",
           isDirty: false,
           isLoading: false,
           loadError: null,
         };
-        setOpenTabs((prev) => (prev.some((t) => t.path === path) ? prev : [...prev, imageTab]));
+        setOpenTabs((prev) => (prev.some((t) => t.path === nextPath) ? prev : [...prev, imageTab]));
         rememberEditorViewState(activeTabPath);
-        setActiveTabPath(path);
-        setSelectedTreePath(path);
-        updateRecentFiles(path);
-        addToNavHistory(path, lineNumber);
+        setActiveTabPath(nextPath);
+        setSelectedTreePath(nextPath);
+        updateRecentFiles(nextPath);
+        addToNavHistory(nextPath, lineNumber);
         setError(null);
         return;
       }
-      pendingOpenPathsRef.current.add(path);
+      pendingOpenPathsRef.current.add(nextPath);
 
       const newTab: EditorDocument = {
-        path,
+        path: nextPath,
         content: "",
         originalContent: "",
         isDirty: false,
         isLoading: true,
         loadError: null,
       };
-      setOpenTabs((prev) => (prev.some((t) => t.path === path) ? prev : [...prev, newTab]));
+      setOpenTabs((prev) => (prev.some((t) => t.path === nextPath) ? prev : [...prev, newTab]));
       rememberEditorViewState(activeTabPath);
-      setActiveTabPath(path);
+      setActiveTabPath(nextPath);
       setError(null);
 
       try {
-        const content = await readFile(path);
+        const content = await readFile(nextPath);
         setOpenTabs((prev) =>
-          prev.some((t) => t.path === path)
+          prev.some((t) => t.path === nextPath)
             ? prev.map((t) =>
-                t.path === path ? { ...t, content, originalContent: content, isLoading: false, loadError: null } : t
+                t.path === nextPath ? { ...t, content, originalContent: content, isLoading: false, loadError: null } : t
               )
             : prev
         );
-        setSelectedTreePath(path);
-        updateRecentFiles(path);
-        addToNavHistory(path, lineNumber);
+        setSelectedTreePath(nextPath);
+        updateRecentFiles(nextPath);
+        addToNavHistory(nextPath, lineNumber);
         // If line number specified, scroll to it after content is loaded
         if (lineNumber !== undefined && lineNumber > 0) {
           setTimeout(() => scrollToLine(lineNumber), 100);
@@ -1612,13 +1928,13 @@ function App() {
         setError(errorMessage);
         setOpenTabs((prev) =>
           prev.map((t) =>
-            t.path === path
+            t.path === nextPath
               ? { ...t, content: "", originalContent: "", isDirty: false, isLoading: false, loadError: errorMessage }
               : t
           )
         );
       } finally {
-        pendingOpenPathsRef.current.delete(path);
+        pendingOpenPathsRef.current.delete(nextPath);
       }
     },
     [openTabs, activeTabPath, updateRecentFiles, scrollToLine, addToNavHistory, rememberEditorViewState]
@@ -1707,16 +2023,19 @@ function App() {
     pendingWorkspaceStateRef.current = null;
 
     void (async () => {
-      const uniquePaths = [...new Set(pendingState.open_tabs.filter(Boolean))];
-      const prioritizedPaths = pendingState.active_tab_path
+      const normalizedOpenTabs = [...new Set(normalizeStoredPaths(pendingState.open_tabs))];
+      const normalizedActivePath = pendingState.active_tab_path
+        ? normalizeInputFilePath(pendingState.active_tab_path)
+        : "";
+      const prioritizedPaths = normalizedActivePath
         ? [
-            pendingState.active_tab_path,
-            ...uniquePaths.filter((path) => path !== pendingState.active_tab_path),
+            normalizedActivePath,
+            ...normalizedOpenTabs.filter((path) => path !== normalizedActivePath),
           ]
-        : uniquePaths;
+        : normalizedOpenTabs;
       const restoreRunId = workspaceRestoreRunRef.current + 1;
       workspaceRestoreRunRef.current = restoreRunId;
-      setPinnedTabPaths(new Set(pendingState.pinned_tab_paths ?? []));
+      setPinnedTabPaths(new Set(normalizeStoredPaths(pendingState.pinned_tab_paths)));
       editorViewStateRef.current = new Map(Object.entries(pendingState.editor_view_states ?? {}));
       setAutoSaveMode(pendingState.auto_save_mode ?? "off");
 
@@ -1735,13 +2054,13 @@ function App() {
         })();
       }, 0);
 
-      if (pendingState.active_tab_path) {
-        setActiveTabPath(pendingState.active_tab_path);
+      if (normalizedActivePath) {
+        setActiveTabPath(normalizedActivePath);
       }
 
       setSelectedTreePath(
-        pendingState.selected_tree_path ||
-        pendingState.active_tab_path ||
+        (pendingState.selected_tree_path ? normalizeInputFilePath(pendingState.selected_tree_path) : "") ||
+        normalizedActivePath ||
         tree.path
       );
     })();
@@ -1921,6 +2240,46 @@ function App() {
     }
     await refreshGitWorkingTreeState();
   }, [openTabs, refreshGitWorkingTreeState, showTransientSaveStatus]);
+
+  const refreshOpenTabsFromDisk = useCallback(async () => {
+    const reloadableTabs = openTabs.filter(
+      (tab) => !tab.isDirty && !tab.isLoading && !tab.loadError && !isImagePath(tab.path)
+    );
+    if (reloadableTabs.length === 0) return;
+
+    const results = await Promise.allSettled(
+      reloadableTabs.map(async (tab) => ({
+        path: tab.path,
+        content: await readFile(tab.path),
+      }))
+    );
+
+    const updatedContent = new Map<string, string>();
+    for (const result of results) {
+      if (result.status !== "fulfilled") continue;
+      const existingTab = reloadableTabs.find((tab) => tab.path === result.value.path);
+      if (!existingTab) continue;
+      if (existingTab.content !== result.value.content || existingTab.originalContent !== result.value.content) {
+        updatedContent.set(result.value.path, result.value.content);
+      }
+    }
+
+    if (updatedContent.size === 0) return;
+
+    setOpenTabs((prev) =>
+      prev.map((tab) => {
+        const nextContent = updatedContent.get(tab.path);
+        if (nextContent === undefined || tab.isDirty) return tab;
+        return {
+          ...tab,
+          content: nextContent,
+          originalContent: nextContent,
+          isDirty: false,
+          loadError: null,
+        };
+      })
+    );
+  }, [openTabs]);
 
   useEffect(() => {
     if (autoSaveMode !== "after_delay") return;
@@ -2210,12 +2569,13 @@ function App() {
           run: () => {
             if (activeTabPath) {
               handleCloseTab(activeTabPath);
+              return true;
             }
-            return true;
+            return false;
           },
         },
       ]),
-    [activeTabPath, handleCloseTab, isMarkdownTab, toggleActiveMarkdownPreview]
+    [activeTabPath, handleCloseTab, isMac, isMarkdownTab, toggleActiveMarkdownPreview]
   );
 
   useEffect(() => {
@@ -2340,6 +2700,32 @@ function App() {
       setError(String(e));
     }
   }, [projectRoot, refreshGitData, openTabs]);
+
+  const handleOpenBranchSwitcher = useCallback(async () => {
+    if (!projectRoot) return;
+
+    try {
+      setError(null);
+      const [branchResult, branchesResult] = await Promise.allSettled([
+        getCurrentBranch(projectRoot),
+        getBranches(projectRoot),
+      ]);
+
+      if (branchResult.status === "fulfilled") {
+        setCurrentBranch(branchResult.value);
+      }
+
+      if (branchesResult.status === "fulfilled") {
+        setBranches(branchesResult.value);
+      } else {
+        setBranches([]);
+      }
+
+      setBranchSwitcherOpen(true);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectRoot]);
 
   const handleShowFileDiff = useCallback(async (filePath: string, options?: { staged?: boolean; commit?: string | null }) => {
     if (!projectRoot) return;
@@ -2549,9 +2935,9 @@ function App() {
         subtitle: currentBranch ? `Current branch: ${currentBranch}` : "Choose another branch in this repository",
         group: "Git",
         keywords: "checkout branch switch git",
-        available: Boolean(projectRoot && isGitRepo && branches.length > 0),
+        available: Boolean(projectRoot && isGitRepo),
         run: () => {
-          setBranchSwitcherOpen(true);
+          void handleOpenBranchSwitcher();
         },
       },
       {
@@ -2608,6 +2994,7 @@ function App() {
     autoSaveMode,
     branches,
     currentBranch,
+    handleOpenBranchSwitcher,
     closedTabHistory.length,
     createProjectWindow,
     handleOpenFolder,
@@ -2870,13 +3257,21 @@ function App() {
   }, [bottomPanelTab, projectRoot, isGitRepo, refreshGitWorkingTreeState]);
 
   useEffect(() => {
-    if (!projectRoot || !isGitRepo) return;
+    if (!projectRoot) return;
 
     const handleWindowFocus = () => {
+      if (document.visibilityState === "hidden") return;
       const now = Date.now();
-      if (now - lastGitFocusRefreshRef.current < 2000) return;
-      lastGitFocusRefreshRef.current = now;
-      void refreshGitWorkingTreeState();
+
+      if (now - lastExternalFileRefreshRef.current >= 1500) {
+        lastExternalFileRefreshRef.current = now;
+        void refreshOpenTabsFromDisk();
+      }
+
+      if (isGitRepo && now - lastGitFocusRefreshRef.current >= 2000) {
+        lastGitFocusRefreshRef.current = now;
+        void refreshGitWorkingTreeState();
+      }
     };
 
     window.addEventListener("focus", handleWindowFocus);
@@ -2885,7 +3280,7 @@ function App() {
       window.removeEventListener("focus", handleWindowFocus);
       document.removeEventListener("visibilitychange", handleWindowFocus);
     };
-  }, [isGitRepo, projectRoot, refreshGitWorkingTreeState]);
+  }, [isGitRepo, projectRoot, refreshGitWorkingTreeState, refreshOpenTabsFromDisk]);
 
   useEffect(() => {
     diffHunkRefs.current = diffHunkRefs.current.slice(0, fileDiff?.hunks.length ?? 0);
@@ -3613,8 +4008,6 @@ function App() {
         (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "w";
       const isReopenClosedTab =
         (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "t";
-      const isQuitApp =
-        (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "q";
       const isRecentFiles =
         (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e";
       const isRecentProjects =
@@ -3800,16 +4193,6 @@ function App() {
         return;
       }
 
-      if (isQuitApp) {
-        e.preventDefault();
-        if (hasAnyUnsavedTabs) {
-          const shouldClose = window.confirm("You have unsaved changes. Close anyway?");
-          if (!shouldClose) return;
-        }
-        void getCurrentWindow().close();
-        return;
-      }
-
       if (isCloseTab) {
         e.preventDefault();
         e.stopPropagation();
@@ -3875,9 +4258,20 @@ function App() {
       if (isInFileSearch) {
         e.preventDefault();
         if (!activeTab) return;
+        const selection = getEditorSelectionState();
+        const selectedText = selection?.text?.trim() ?? "";
         setInFileSearchOpen(true);
         setInFileReplaceOpen(false);
-        setTimeout(() => inFileInputRef.current?.focus(), 0);
+        if (selectedText) {
+          setInFileQuery(selectedText);
+        }
+        setCurrentMatchIndex(-1);
+        setTimeout(() => {
+          inFileInputRef.current?.focus();
+          if (selectedText) {
+            inFileInputRef.current?.select();
+          }
+        }, 0);
         return;
       }
 
@@ -3987,7 +4381,6 @@ function App() {
     handleOpenFolder,
     handleSave,
     handleSaveAll,
-    hasAnyUnsavedTabs,
     handleCloseTab,
     handleReopenClosedTab,
     openCommandPalette,
@@ -3997,6 +4390,7 @@ function App() {
     goToNextMatch,
     goToPrevMatch,
     handleReplaceCurrentMatch,
+    getEditorSelectionState,
     goBack,
     goForward,
     selectedGitFilePath,
@@ -4248,9 +4642,7 @@ function App() {
               {inFileSearchError
                 ? "Regex error"
                 : inFileMatches.length > 0
-                ? currentMatchIndex === -1
-                  ? `- of ${inFileMatches.length}`
-                  : `${currentMatchIndex + 1} of ${inFileMatches.length}`
+                ? `${(currentMatchIndex === -1 ? 0 : currentMatchIndex) + 1} of ${inFileMatches.length}`
                 : inFileQuery ? "0 of 0" : ""}
             </span>
             <button
@@ -4783,7 +5175,7 @@ function App() {
             {isGitRepo && currentBranch && (
               <button
                 className="branch-badge"
-                onClick={() => setBranchSwitcherOpen(true)}
+                onClick={() => void handleOpenBranchSwitcher()}
                 title="Switch branch"
               >
                 <span className="branch-icon">⎇</span>
@@ -4862,6 +5254,7 @@ function App() {
                     setSelectedTreePath(path);
                   }}
                   onContextMenu={(path, isDir, e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     setTabContextMenu(null);
                     setContextMenu({ x: e.clientX, y: e.clientY, path, isDir });
@@ -4875,6 +5268,7 @@ function App() {
             <div
               className="context-menu"
               style={{ left: contextMenu.x, top: contextMenu.y }}
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setContextMenu(null)}
             >
               {contextMenu.isDir && (
@@ -5044,6 +5438,7 @@ function App() {
             <div
               className="context-menu"
               style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setTabContextMenu(null)}
             >
               <div
@@ -5171,15 +5566,38 @@ function App() {
                             height: event.currentTarget.naturalHeight,
                           });
                         }}
-                        onError={() => setImagePreviewError(activeImageSrc)}
+                        onError={() => setImagePreviewError(activeTab.path)}
                       />
                     </div>
                   )}
                 </div>
               ) : isActiveMarkdownPreviewOpen && isMarkdownTab ? (
                 (() => {
-                  let headingIndex = 0;
-                  const nextHeadingId = () => markdownHeadings[headingIndex++]?.id;
+                  const outlineHeadings = renderedMarkdownHeadings.length > 0 ? renderedMarkdownHeadings : markdownHeadings;
+                  const renderedHeadingCounts = new Map<string, number>();
+                  const renderHeading = (level: number, children: ReactNode) => {
+                    const text = extractTextFromReactNode(children).trim();
+                    const baseSlug = slugifyHeading(text) || `section-${renderedHeadingCounts.size + 1}`;
+                    const seen = renderedHeadingCounts.get(baseSlug) ?? 0;
+                    renderedHeadingCounts.set(baseSlug, seen + 1);
+                    const id = seen === 0 ? baseSlug : `${baseSlug}-${seen + 1}`;
+                    const className = `md-heading md-heading-${level}`;
+
+                    switch (level) {
+                      case 1:
+                        return <h1 id={id} className={className}>{children}</h1>;
+                      case 2:
+                        return <h2 id={id} className={className}>{children}</h2>;
+                      case 3:
+                        return <h3 id={id} className={className}>{children}</h3>;
+                      case 4:
+                        return <h4 id={id} className={className}>{children}</h4>;
+                      case 5:
+                        return <h5 id={id} className={className}>{children}</h5>;
+                      default:
+                        return <h6 id={id} className={className}>{children}</h6>;
+                    }
+                  };
                   return (
                     <div className="markdown-preview">
                       <div className="markdown-preview-toolbar">
@@ -5187,15 +5605,15 @@ function App() {
                           Previewing {toRelativePath(projectRoot, activeTab.path)}
                         </div>
                         <div className="markdown-preview-meta">
-                          {markdownHeadings.length} section{markdownHeadings.length === 1 ? "" : "s"}
+                          {outlineHeadings.length} section{outlineHeadings.length === 1 ? "" : "s"}
                         </div>
                       </div>
-                      <div className={`markdown-preview-layout ${markdownHeadings.length > 0 ? "has-outline" : ""}`}>
-                        {markdownHeadings.length > 0 && (
+                      <div className={`markdown-preview-layout ${outlineHeadings.length > 0 ? "has-outline" : ""}`}>
+                        {outlineHeadings.length > 0 && (
                           <aside className="markdown-outline">
                             <div className="markdown-outline-title">Outline</div>
                             <div className="markdown-outline-list">
-                              {markdownHeadings.map((heading) => (
+                              {outlineHeadings.map((heading) => (
                                 <button
                                   key={heading.id}
                                   type="button"
@@ -5212,12 +5630,12 @@ function App() {
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             components={{
-                              h1: ({ children }) => <h1 id={nextHeadingId()} className="md-heading md-heading-1">{children}</h1>,
-                              h2: ({ children }) => <h2 id={nextHeadingId()} className="md-heading md-heading-2">{children}</h2>,
-                              h3: ({ children }) => <h3 id={nextHeadingId()} className="md-heading md-heading-3">{children}</h3>,
-                              h4: ({ children }) => <h4 id={nextHeadingId()} className="md-heading md-heading-4">{children}</h4>,
-                              h5: ({ children }) => <h5 id={nextHeadingId()} className="md-heading md-heading-5">{children}</h5>,
-                              h6: ({ children }) => <h6 id={nextHeadingId()} className="md-heading md-heading-6">{children}</h6>,
+                              h1: ({ children }) => renderHeading(1, children),
+                              h2: ({ children }) => renderHeading(2, children),
+                              h3: ({ children }) => renderHeading(3, children),
+                              h4: ({ children }) => renderHeading(4, children),
+                              h5: ({ children }) => renderHeading(5, children),
+                              h6: ({ children }) => renderHeading(6, children),
                               p: ({ children }) => <p className="md-paragraph">{children}</p>,
                               ul: ({ children }) => <ul className="md-list">{children}</ul>,
                               ol: ({ children }) => <ol className="md-list">{children}</ol>,
@@ -5262,11 +5680,15 @@ function App() {
                                 );
                               },
                               img: ({ src, alt }) => {
-                                const resolvedPath = src && activeTab?.path
-                                  ? resolveMarkdownResourcePath(activeTab.path, src, projectRoot)
-                                  : null;
-                                const imageSrc = resolvedPath ? convertFileSrc(resolvedPath) : (src ?? "");
-                                return <img className="md-image" src={imageSrc} alt={alt ?? ""} />;
+                                if (!activeTab?.path) return null;
+                                return (
+                                  <MarkdownImage
+                                    src={src}
+                                    alt={alt}
+                                    baseFilePath={activeTab.path}
+                                    projectRoot={projectRoot}
+                                  />
+                                );
                               },
                               table: ({ children }) => <div className="md-table-wrap"><table className="md-table">{children}</table></div>,
                               th: ({ children }) => <th className="md-table-head">{children}</th>,
@@ -5280,7 +5702,7 @@ function App() {
                                 ),
                             }}
                           >
-                            {activeTab.content}
+                            {markdownPreviewContent}
                           </ReactMarkdown>
                         </div>
                       </div>
@@ -5351,13 +5773,6 @@ function App() {
                     >
                       Open Folder
                       <span className="welcome-btn-shortcut">{shortcutLabel("O")}</span>
-                    </button>
-                    <button
-                      className="welcome-btn"
-                      onClick={() => setRecentProjectsOpen(true)}
-                    >
-                      Recent Projects
-                      <span className="welcome-btn-shortcut">{shortcutLabel("O", { shift: true })}</span>
                     </button>
                   </div>
                   {!!recentProjects.length && (

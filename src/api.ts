@@ -9,6 +9,10 @@ export function readFile(path: string) {
   return invoke<string>("read_file", { path });
 }
 
+export function readImageDataUrl(path: string) {
+  return invoke<string>("read_image_data_url", { path });
+}
+
 export function writeFile(path: string, content: string) {
   return invoke<void>("write_file", { path, content });
 }

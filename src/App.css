@@ -8,6 +8,7 @@ body, html, #root {
   height: 100%;
   width: 100%;
   overflow: hidden;
+  background: #1e1e1e;
   font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 13px;
   color: #c5ccd4;
@@ -19,8 +20,10 @@ body, html, #root {
 .app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  width: 100vw;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  width: 100%;
   background: #1e1e1e;
 }
 
@@ -34,6 +37,8 @@ body, html, #root {
   gap: 14px;
   flex-shrink: 0;
   -webkit-app-region: drag;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .titlebar .logo,
@@ -171,6 +176,8 @@ body, html, #root {
   color: #d5dbe3;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .panel-content {
@@ -209,6 +216,8 @@ body, html, #root {
   line-height: 1.35;
   border-radius: 3px;
   margin: 0 4px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .tree-folder:hover,
@@ -356,6 +365,8 @@ body, html, #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .breadcrumb-item:hover {
@@ -513,6 +524,8 @@ body, html, #root {
   padding: 7px 10px;
   border-radius: 8px;
   cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .markdown-outline-item:hover {
@@ -538,6 +551,8 @@ body, html, #root {
     linear-gradient(-45deg, transparent 75%, #23262b 75%);
   background-size: 20px 20px;
   background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .image-preview-toolbar {
@@ -552,6 +567,8 @@ body, html, #root {
   background: rgba(24, 27, 31, 0.92);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .image-preview-actions {
@@ -595,6 +612,8 @@ body, html, #root {
   display: flex;
   justify-content: center;
   padding: 28px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .image-preview-stage.fit {
@@ -620,6 +639,8 @@ body, html, #root {
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
   background: #ffffff;
   transform-origin: top center;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .image-preview-stage.actual .image-preview-content {
@@ -753,6 +774,22 @@ body, html, #root {
   margin: 0 0 1.2em;
   border-radius: 12px;
   border: 1px solid #2d3238;
+}
+
+.md-image-loading,
+.md-image-error {
+  margin: 0 0 1.2em;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #2d3238;
+  background: #181a1d;
+  color: #b9c0c8;
+}
+
+.md-image-error strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #f06a6a;
 }
 
 .md-table-wrap {
@@ -1859,6 +1896,8 @@ body, html, #root {
   border: 1px solid transparent;
   border-bottom: none;
   margin-top: 4px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .tab-item.pinned {
@@ -2487,6 +2526,8 @@ body, html, #root {
   z-index: 1000;
   min-width: 160px;
   padding: 4px 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .context-menu-item {
@@ -2494,6 +2535,8 @@ body, html, #root {
   cursor: pointer;
   font-size: 13px;
   color: #cccccc;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .context-menu-item:hover {
