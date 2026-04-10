@@ -160,6 +160,8 @@ pub struct SessionState {
     pub editor_view_states: HashMap<String, EditorViewStateSnapshot>,
     #[serde(default)]
     pub auto_save_mode: String,
+    #[serde(default)]
+    pub external_link_mode: String,
     pub active_tab_path: String,
     pub open_folders: Vec<String>,
     pub recent_file_paths: Vec<String>,
@@ -1435,6 +1437,7 @@ fn empty_session_state(project_root: Option<String>) -> SessionState {
         pinned_tab_paths: vec![],
         editor_view_states: HashMap::new(),
         auto_save_mode: "off".to_string(),
+        external_link_mode: "browser".to_string(),
         active_tab_path: String::new(),
         open_folders: vec![],
         recent_file_paths: vec![],
@@ -1465,6 +1468,10 @@ fn filter_session_state(state: SessionState) -> SessionState {
         "off" | "after_delay" => state.auto_save_mode,
         _ => "off".to_string(),
     };
+    let external_link_mode = match state.external_link_mode.as_str() {
+        "browser" | "confirm" => state.external_link_mode,
+        _ => "browser".to_string(),
+    };
     let editor_view_states = state
         .editor_view_states
         .into_iter()
@@ -1477,6 +1484,7 @@ fn filter_session_state(state: SessionState) -> SessionState {
         pinned_tab_paths: state.pinned_tab_paths.into_iter().filter(|p| Path::new(p).exists()).collect(),
         editor_view_states,
         auto_save_mode,
+        external_link_mode,
         active_tab_path,
         open_folders: state.open_folders.into_iter().filter(|p| Path::new(p).exists()).collect(),
         recent_file_paths: state.recent_file_paths.into_iter().filter(|p| Path::new(p).exists()).collect(),

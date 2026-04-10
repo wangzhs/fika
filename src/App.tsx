@@ -12,7 +12,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { relaunch } from "@tauri-apps/plugin-process";
 import "./App.css";
-import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab, FileBlame, StagedFile, RecentProject, NavigationEntry, SessionState, EditorViewStateSnapshot, AutoSaveMode, GitSyncStatus } from "./types";
+import type { AvailableUpdate, Branch, ChangedFile, Commit, CommitFiles, FileDiff, FileNode, EditorDocument, SearchResult, BottomPanelTab, FileBlame, StagedFile, RecentProject, NavigationEntry, SessionState, EditorViewStateSnapshot, AutoSaveMode, GitSyncStatus, ExternalLinkMode } from "./types";
 import {
   openFolder, readFile, writeFile, searchInProject,
   readImageDataUrl,
@@ -112,6 +112,101 @@ function toRelativePath(root: string | null, absolutePath: string) {
 
 function normalizeFilePath(path: string) {
   return path.replace(/\\/g, "/");
+}
+
+function isMarkdownPath(path: string) {
+  return /\.(md|markdown)$/i.test(path);
+}
+
+function isHtmlPath(path: string) {
+  return /\.(html|htm)$/i.test(path);
+}
+
+function isDelimitedTablePath(path: string) {
+  return /\.(csv|tsv)$/i.test(path);
+}
+
+function detectDelimitedSeparator(path: string, content: string) {
+  if (/\.tsv$/i.test(path)) return "\t";
+  const firstLine = content.split(/\r?\n/, 1)[0] ?? "";
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const semicolonCount = (firstLine.match(/;/g) || []).length;
+  return semicolonCount > commaCount ? ";" : ",";
+}
+
+function parseDelimitedRows(content: string, separator: string) {
+  const rows: string[][] = [];
+  let currentCell = "";
+  let currentRow: string[] = [];
+  let inQuotes = false;
+
+  const pushCell = () => {
+    currentRow.push(currentCell);
+    currentCell = "";
+  };
+
+  const pushRow = () => {
+    pushCell();
+    rows.push(currentRow);
+    currentRow = [];
+  };
+
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    const nextChar = content[index + 1];
+
+    if (char === "\"") {
+      if (inQuotes && nextChar === "\"") {
+        currentCell += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (!inQuotes && char === separator) {
+      pushCell();
+      continue;
+    }
+
+    if (!inQuotes && char === "\n") {
+      pushRow();
+      continue;
+    }
+
+    if (!inQuotes && char === "\r") {
+      continue;
+    }
+
+    currentCell += char;
+  }
+
+  if (currentCell.length > 0 || currentRow.length > 0) {
+    pushRow();
+  }
+
+  return rows;
+}
+
+function injectHtmlPreviewBase(html: string, filePath: string) {
+  const parentDir = getParentDirPath(filePath, filePath);
+  const baseHref = `file://${encodeURI(parentDir.endsWith("/") ? parentDir : `${parentDir}/`)}`;
+  const baseTag = `<base href="${baseHref}">`;
+
+  if (/<base\b/i.test(html)) {
+    return html;
+  }
+
+  if (/<head\b[^>]*>/i.test(html)) {
+    return html.replace(/<head\b([^>]*)>/i, `<head$1>${baseTag}`);
+  }
+
+  if (/<html\b[^>]*>/i.test(html)) {
+    return html.replace(/<html\b([^>]*)>/i, `<html$1><head>${baseTag}</head>`);
+  }
+
+  return `<!DOCTYPE html><html><head>${baseTag}</head><body>${html}</body></html>`;
 }
 
 function getParentDirPath(path: string, fallback: string) {
@@ -470,6 +565,7 @@ function createEmptySessionState(projectRoot: string | null = null): SessionStat
     pinned_tab_paths: [],
     editor_view_states: {},
     auto_save_mode: "off",
+    external_link_mode: "browser",
     active_tab_path: "",
     open_folders: [],
     recent_file_paths: [],
@@ -491,6 +587,58 @@ function slugifyHeading(text: string) {
 
 function isExternalUrl(value: string) {
   return /^(?:[a-z]+:)?\/\//i.test(value) || value.startsWith("mailto:") || value.startsWith("tel:");
+}
+
+type ErrorCategory = "filesystem" | "git" | "search" | "workspace" | "update" | "general";
+
+type ErrorEntry = {
+  id: number;
+  category: ErrorCategory;
+  title: string;
+  message: string;
+  details: string;
+  timestamp: number;
+  retryLabel?: string;
+};
+
+function inferErrorCategory(details: string): ErrorCategory {
+  const normalized = details.toLowerCase();
+  if (normalized.includes("git")) return "git";
+  if (normalized.includes("search")) return "search";
+  if (normalized.includes("update")) return "update";
+  if (
+    normalized.includes("file") ||
+    normalized.includes("directory") ||
+    normalized.includes("path") ||
+    normalized.includes("os error")
+  ) {
+    return "filesystem";
+  }
+  if (
+    normalized.includes("workspace") ||
+    normalized.includes("session") ||
+    normalized.includes("window")
+  ) {
+    return "workspace";
+  }
+  return "general";
+}
+
+function defaultErrorTitle(category: ErrorCategory) {
+  switch (category) {
+    case "filesystem":
+      return "File Operation Failed";
+    case "git":
+      return "Git Operation Failed";
+    case "search":
+      return "Search Failed";
+    case "workspace":
+      return "Workspace Action Failed";
+    case "update":
+      return "Update Failed";
+    default:
+      return "Action Failed";
+  }
 }
 
 function decodeUriRecursively(value: string, attempts = 3) {
@@ -669,7 +817,8 @@ declare global {
 function App() {
   const isMac = useMemo(() => isMacPlatform(), []);
   const currentWindowLabel = useMemo(() => getCurrentWebviewWindow().label, []);
-  const [markdownPreviewByPath, setMarkdownPreviewByPath] = useState<Record<string, boolean>>({});
+  const [previewByPath, setPreviewByPath] = useState<Record<string, boolean>>({});
+  const [splitPreviewByPath, setSplitPreviewByPath] = useState<Record<string, boolean>>({});
   const [imagePreviewError, setImagePreviewError] = useState<string | null>(null);
   const [imageZoom, setImageZoom] = useState(100);
   const [imageFitMode, setImageFitMode] = useState<"fit" | "actual">("fit");
@@ -694,6 +843,41 @@ function App() {
   const tabSwitcherShortcutLabel = useMemo(() => (
     isMac ? "⌃Tab" : "Ctrl+Tab"
   ), [isMac]);
+  const setError = useCallback((value: string | null | {
+    category?: ErrorCategory;
+    title?: string;
+    message?: string;
+    details?: string;
+    retry?: () => void | Promise<void>;
+    retryLabel?: string;
+  }) => {
+    if (value === null) {
+      errorRetryRef.current = null;
+      setErrorState(null);
+      return;
+    }
+
+    const rawDetails = typeof value === "string"
+      ? value
+      : value.details ?? value.message ?? "Unknown error";
+    const category = typeof value === "string"
+      ? inferErrorCategory(rawDetails)
+      : (value.category ?? inferErrorCategory(rawDetails));
+    const id = nextErrorIdRef.current++;
+    const entry: ErrorEntry = {
+      id,
+      category,
+      title: typeof value === "string" ? defaultErrorTitle(category) : (value.title ?? defaultErrorTitle(category)),
+      message: typeof value === "string" ? rawDetails.split("\n")[0] ?? rawDetails : (value.message ?? rawDetails.split("\n")[0] ?? rawDetails),
+      details: rawDetails,
+      timestamp: Date.now(),
+      retryLabel: typeof value === "string" ? undefined : value.retryLabel,
+    };
+
+    errorRetryRef.current = typeof value === "string" ? null : (value.retry ?? null);
+    setErrorState(entry);
+    setErrorLog((prev) => [entry, ...prev].slice(0, 30));
+  }, []);
 
   const [rootName, setRootName] = useState<string | null>(null);
   const [projectRoot, setProjectRoot] = useState<string | null>(null);
@@ -702,13 +886,17 @@ function App() {
   const [projectFileIndexLoaded, setProjectFileIndexLoaded] = useState(false);
   const [projectFileIndexLoading, setProjectFileIndexLoading] = useState(false);
   const [autoSaveMode, setAutoSaveMode] = useState<AutoSaveMode>("off");
+  const [externalLinkMode, setExternalLinkMode] = useState<ExternalLinkMode>("browser");
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
   const [openTabs, setOpenTabs] = useState<EditorDocument[]>([]);
   const [pinnedTabPaths, setPinnedTabPaths] = useState<Set<string>>(new Set());
   const [activeTabPath, setActiveTabPath] = useState<string>("");
   const [closedTabHistory, setClosedTabHistory] = useState<string[]>([]);
   const [selectedTreePath, setSelectedTreePath] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<ErrorEntry | null>(null);
+  const [errorLog, setErrorLog] = useState<ErrorEntry[]>([]);
+  const [errorLogOpen, setErrorLogOpen] = useState(false);
+  const [debugPanelOpen, setDebugPanelOpen] = useState(false);
   const [recentFilePaths, setRecentFilePaths] = useState<string[]>([]);
 
   const [finderOpen, setFinderOpen] = useState(false);
@@ -730,6 +918,8 @@ function App() {
   const [commandPaletteSelectedIndex, setCommandPaletteSelectedIndex] = useState(0);
   const [commandPaletteRecentIds, setCommandPaletteRecentIds] = useState<string[]>([]);
   const commandPaletteInputRef = useRef<HTMLInputElement>(null);
+  const errorRetryRef = useRef<(() => void | Promise<void>) | null>(null);
+  const nextErrorIdRef = useRef(1);
 
   const [tabSwitcherOpen, setTabSwitcherOpen] = useState(false);
   const [tabSwitcherQuery, setTabSwitcherQuery] = useState("");
@@ -994,12 +1184,28 @@ function App() {
     [activeTab]
   );
   const isMarkdownTab = useMemo(
-    () => !!activeTab?.path && /\.(md|markdown)$/i.test(activeTab.path),
+    () => !!activeTab?.path && isMarkdownPath(activeTab.path),
     [activeTab]
   );
-  const isActiveMarkdownPreviewOpen = useMemo(
-    () => Boolean(activeTab?.path && markdownPreviewByPath[activeTab.path]),
-    [activeTab?.path, markdownPreviewByPath]
+  const isHtmlTab = useMemo(
+    () => !!activeTab?.path && isHtmlPath(activeTab.path),
+    [activeTab]
+  );
+  const isDelimitedTableTab = useMemo(
+    () => !!activeTab?.path && isDelimitedTablePath(activeTab.path),
+    [activeTab]
+  );
+  const isPreviewableTab = useMemo(
+    () => isMarkdownTab || isHtmlTab || isDelimitedTableTab,
+    [isDelimitedTableTab, isHtmlTab, isMarkdownTab]
+  );
+  const isActivePreviewOpen = useMemo(
+    () => Boolean(activeTab?.path && previewByPath[activeTab.path]),
+    [activeTab?.path, previewByPath]
+  );
+  const isActiveSplitPreviewOpen = useMemo(
+    () => Boolean(activeTab?.path && splitPreviewByPath[activeTab.path]),
+    [activeTab?.path, splitPreviewByPath]
   );
   const [activeImageSrc, setActiveImageSrc] = useState<string | null>(null);
   const [renderedMarkdownHeadings, setRenderedMarkdownHeadings] = useState<Array<{ level: number; text: string; id: string }>>([]);
@@ -1011,18 +1217,39 @@ function App() {
     if (!activeTab || !isMarkdownTab) return [];
     return extractMarkdownHeadings(markdownPreviewContent);
   }, [activeTab, isMarkdownTab, markdownPreviewContent]);
-  const setActiveMarkdownPreviewOpen = useCallback((open: boolean) => {
+  const setActivePreviewOpen = useCallback((open: boolean) => {
     if (!activeTab?.path) return;
-    setMarkdownPreviewByPath((prev) => ({
+    setPreviewByPath((prev) => ({
       ...prev,
       [activeTab.path]: open,
     }));
+    setSplitPreviewByPath((prev) => ({
+      ...prev,
+      [activeTab.path]: false,
+    }));
   }, [activeTab?.path]);
-  const toggleActiveMarkdownPreview = useCallback(() => {
+  const setActiveSplitPreviewOpen = useCallback((open: boolean) => {
     if (!activeTab?.path) return;
-    setMarkdownPreviewByPath((prev) => ({
+    setSplitPreviewByPath((prev) => ({
+      ...prev,
+      [activeTab.path]: open,
+    }));
+    if (open) {
+      setPreviewByPath((prev) => ({
+        ...prev,
+        [activeTab.path]: true,
+      }));
+    }
+  }, [activeTab?.path]);
+  const toggleActivePreview = useCallback(() => {
+    if (!activeTab?.path) return;
+    setPreviewByPath((prev) => ({
       ...prev,
       [activeTab.path]: !prev[activeTab.path],
+    }));
+    setSplitPreviewByPath((prev) => ({
+      ...prev,
+      [activeTab.path]: false,
     }));
   }, [activeTab?.path]);
   const scrollMarkdownHeadingIntoView = useCallback((id: string) => {
@@ -1036,7 +1263,7 @@ function App() {
     container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
   }, []);
   useEffect(() => {
-    if (!isMarkdownTab || !isActiveMarkdownPreviewOpen) {
+    if (!isMarkdownTab || !isActivePreviewOpen) {
       setRenderedMarkdownHeadings([]);
       return;
     }
@@ -1056,7 +1283,25 @@ function App() {
     collect();
     const frameId = window.requestAnimationFrame(collect);
     return () => window.cancelAnimationFrame(frameId);
-  }, [activeTab?.path, isActiveMarkdownPreviewOpen, isMarkdownTab, markdownPreviewContent]);
+  }, [activeTab?.path, isActivePreviewOpen, isMarkdownTab, markdownPreviewContent]);
+  const activeTablePreview = useMemo(() => {
+    if (!activeTab || !isDelimitedTableTab) return null;
+    const separator = detectDelimitedSeparator(activeTab.path, activeTab.content);
+    const rows = parseDelimitedRows(activeTab.content, separator);
+    const nonEmptyRows = rows.filter((row) => row.some((cell) => cell.trim().length > 0));
+    const columnCount = nonEmptyRows.reduce((max, row) => Math.max(max, row.length), 0);
+    const header = nonEmptyRows[0] ?? [];
+    const bodyRows = nonEmptyRows.slice(1);
+    const visibleRows = bodyRows.slice(0, 200);
+    return {
+      separator,
+      header,
+      rows: visibleRows,
+      totalRows: bodyRows.length,
+      columnCount,
+      truncated: bodyRows.length > visibleRows.length,
+    };
+  }, [activeTab, isDelimitedTableTab]);
   useEffect(() => {
     if (!contextMenu && !tabContextMenu) return;
 
@@ -1395,7 +1640,7 @@ function App() {
   }, [activeTab?.path, isImageTab]);
 
   useEffect(() => {
-    if (!activeTab || isImageTab || (isMarkdownTab && isActiveMarkdownPreviewOpen)) return;
+    if (!activeTab || isImageTab || (isPreviewableTab && isActivePreviewOpen)) return;
 
     const viewState = editorViewStateRef.current.get(activeTab.path);
     if (!viewState) return;
@@ -1413,7 +1658,7 @@ function App() {
     });
 
     return () => window.cancelAnimationFrame(frameId);
-  }, [activeTab, isImageTab, isMarkdownTab, isActiveMarkdownPreviewOpen]);
+  }, [activeTab, isActivePreviewOpen, isImageTab, isPreviewableTab]);
 
   const updateRecentFiles = useCallback((path: string) => {
     if (!projectRoot || !path.startsWith(projectRoot)) return;
@@ -1607,7 +1852,13 @@ function App() {
       }
     } catch (e) {
       if (globalSearchRequestIdRef.current !== requestId) return;
-      setError(String(e));
+      setError({
+        category: "search",
+        title: "Project Search Failed",
+        details: String(e),
+        retry: () => void handleGlobalSearch(),
+        retryLabel: "Retry Search",
+      });
       setGlobalSearchResults([]);
     } finally {
       if (globalSearchRequestIdRef.current !== requestId) return;
@@ -1644,7 +1895,13 @@ function App() {
       setProjectFileIndexLoaded(true);
       return nextPaths;
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "filesystem",
+        title: "File Index Refresh Failed",
+        details: String(e),
+        retry: () => void loadProjectFileIndex(force),
+        retryLabel: "Retry",
+      });
       return projectFilePaths;
     } finally {
       setProjectFileIndexLoading(false);
@@ -1709,7 +1966,13 @@ function App() {
       setGitChanges(changes);
       setStagedFiles(staged);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "workspace",
+        title: "Open Folder Failed",
+        details: String(e),
+        retry: targetPath ? () => void handleOpenFolderWithSession(targetPath) : undefined,
+        retryLabel: targetPath ? "Retry Open" : undefined,
+      });
     }
   }, [openTabs, addRecentProject]);
 
@@ -1759,7 +2022,13 @@ function App() {
 
     nextWindow.once("tauri://error", () => {
       localStorage.removeItem(storageKey);
-      setError("Failed to open a new project window");
+      setError({
+        category: "workspace",
+        title: "New Window Failed",
+        details: "Failed to open a new project window",
+        retry: () => void createProjectWindow(projectPath),
+        retryLabel: "Retry Open",
+      });
     });
   }, []);
 
@@ -1964,6 +2233,10 @@ function App() {
     }
 
     if (isExternalUrl(href)) {
+      if (externalLinkMode === "confirm") {
+        const confirmed = window.confirm(`Open external link in your browser?\n\n${href}`);
+        if (!confirmed) return;
+      }
       window.open(href, "_blank", "noopener,noreferrer");
       return;
     }
@@ -1982,21 +2255,21 @@ function App() {
       pendingMarkdownAnchorRef.current = { path: resolvedPath, id: hash };
     }
 
-    if (/\.(md|markdown)$/i.test(resolvedPath)) {
-      setMarkdownPreviewByPath((prev) => ({
+    if (isMarkdownPath(resolvedPath)) {
+      setPreviewByPath((prev) => ({
         ...prev,
         [resolvedPath]: true,
       }));
     }
 
     await handleOpenFile(resolvedPath, undefined, "markdown-link-open");
-  }, [activeTab?.path, handleOpenFile, projectRoot, scrollMarkdownHeadingIntoView]);
+  }, [activeTab?.path, externalLinkMode, handleOpenFile, projectRoot, scrollMarkdownHeadingIntoView]);
 
   useEffect(() => {
     const pendingAnchor = pendingMarkdownAnchorRef.current;
     if (!pendingAnchor) return;
     if (!activeTab?.path || activeTab.path !== pendingAnchor.path) return;
-    if (!isMarkdownTab || !isActiveMarkdownPreviewOpen || markdownHeadings.length === 0) return;
+    if (!isMarkdownTab || !isActivePreviewOpen || markdownHeadings.length === 0) return;
 
     pendingMarkdownAnchorRef.current = null;
     window.setTimeout(() => {
@@ -2005,7 +2278,7 @@ function App() {
   }, [
     activeTab?.path,
     isMarkdownTab,
-    isActiveMarkdownPreviewOpen,
+    isActivePreviewOpen,
     markdownHeadings,
     scrollMarkdownHeadingIntoView,
   ]);
@@ -2025,7 +2298,13 @@ function App() {
 
       await handleOpenFolderWithSession(target.root);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "workspace",
+        title: "Open Path Failed",
+        details: String(e),
+        retry: () => void handleOpenSystemPath(path),
+        retryLabel: "Retry Open",
+      });
     }
   }, [handleOpenFile, handleOpenFolderWithSession]);
 
@@ -2052,6 +2331,7 @@ function App() {
       setPinnedTabPaths(new Set(normalizeStoredPaths(pendingState.pinned_tab_paths)));
       editorViewStateRef.current = new Map(Object.entries(pendingState.editor_view_states ?? {}));
       setAutoSaveMode(pendingState.auto_save_mode ?? "off");
+      setExternalLinkMode(pendingState.external_link_mode ?? "browser");
 
       const [primaryPath, ...secondaryPaths] = prioritizedPaths;
       if (primaryPath) {
@@ -2159,7 +2439,13 @@ function App() {
 
       await handleGlobalSearch();
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "search",
+        title: "Replace Across Project Failed",
+        details: String(e),
+        retry: () => void handleReplaceAcrossProject(),
+        retryLabel: "Retry Replace",
+      });
     } finally {
       setGlobalSearchLoading(false);
     }
@@ -2180,6 +2466,7 @@ function App() {
     operation: () => Promise<void>,
     options?: {
       onAfterRefresh?: (state: { changes: ChangedFile[]; staged: StagedFile[] }) => Promise<void> | void;
+      errorTitle?: string;
     }
   ) => {
     setError(null);
@@ -2188,7 +2475,13 @@ function App() {
       const nextState = await refreshGitWorkingTreeState();
       await options?.onAfterRefresh?.(nextState);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "git",
+        title: options?.errorTitle ?? "Git Operation Failed",
+        details: String(e),
+        retry: () => void runGitWorkingTreeMutation(operation, options),
+        retryLabel: "Retry",
+      });
     }
   }, [refreshGitWorkingTreeState]);
 
@@ -2209,7 +2502,13 @@ function App() {
       await refreshGitWorkingTreeState();
       showTransientSaveStatus("saved");
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "filesystem",
+        title: "Save Failed",
+        details: String(e),
+        retry: () => void handleSave(),
+        retryLabel: "Retry Save",
+      });
       showTransientSaveStatus("error");
     }
   }, [openTabs, activeTabPath, refreshGitWorkingTreeState, showTransientSaveStatus]);
@@ -2247,7 +2546,14 @@ function App() {
     );
 
     if (errors.length > 0) {
-      setError(`Save all failed for some files:\n${errors.join("\n")}`);
+      setError({
+        category: "filesystem",
+        title: "Save All Failed",
+        message: `${errors.length} file${errors.length === 1 ? "" : "s"} could not be saved`,
+        details: errors.join("\n"),
+        retry: () => void handleSaveAll(),
+        retryLabel: "Retry Save All",
+      });
       showTransientSaveStatus("error");
     } else {
       showTransientSaveStatus("saved");
@@ -2573,8 +2879,8 @@ function App() {
           key: "Mod-Shift-m",
           preventDefault: true,
           run: () => {
-            if (!isMarkdownTab) return false;
-            toggleActiveMarkdownPreview();
+            if (!isPreviewableTab) return false;
+            toggleActivePreview();
             return true;
           },
         },
@@ -2590,7 +2896,7 @@ function App() {
           },
         },
       ]),
-    [activeTabPath, handleCloseTab, isMac, isMarkdownTab, toggleActiveMarkdownPreview]
+    [activeTabPath, handleCloseTab, isMac, isPreviewableTab, toggleActivePreview]
   );
   const editorDomHandlers = useMemo(
     () =>
@@ -2609,10 +2915,10 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isMarkdownTab) return;
+      if (!isPreviewableTab) return;
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "m") {
         event.preventDefault();
-        toggleActiveMarkdownPreview();
+        toggleActivePreview();
       }
     };
 
@@ -2620,7 +2926,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [isMarkdownTab, toggleActiveMarkdownPreview]);
+  }, [isPreviewableTab, toggleActivePreview]);
 
   const toggleFolder = useCallback(async (path: string) => {
     setOpenFolders((prev) => {
@@ -2734,7 +3040,11 @@ function App() {
       await refreshGitData();
       setBranchSwitcherOpen(false);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "git",
+        title: "Switch Branch Failed",
+        details: String(e),
+      });
     }
   }, [projectRoot, refreshGitData, openTabs]);
 
@@ -2760,7 +3070,13 @@ function App() {
 
       setBranchSwitcherOpen(true);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "git",
+        title: "Load Branches Failed",
+        details: String(e),
+        retry: () => void handleOpenBranchSwitcher(),
+        retryLabel: "Retry",
+      });
     }
   }, [projectRoot]);
 
@@ -2783,7 +3099,13 @@ function App() {
       setFileDiff(diff);
       setSelectedDiffHunkIndex(0);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "git",
+        title: "Open Diff Failed",
+        details: String(e),
+        retry: () => void handleShowFileDiff(filePath, options),
+        retryLabel: "Retry Diff",
+      });
     }
   }, [projectRoot]);
 
@@ -2805,7 +3127,13 @@ function App() {
       setCommitFiles(files);
       setSelectedGitFilePath(files.files[0]?.path ?? null);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "git",
+        title: "Load Commit Files Failed",
+        details: String(e),
+        retry: () => void handleShowCommitFiles(commitHash),
+        retryLabel: "Retry",
+      });
     }
   }, [projectRoot, gitHistoryFilePath, handleShowFileDiff]);
 
@@ -2821,7 +3149,13 @@ function App() {
         setGitHistory(history);
         setGitHistoryFilePath(historyPath ?? null);
       } catch (e) {
-        setError(String(e));
+        setError({
+          category: "git",
+          title: "Load Git History Failed",
+          details: String(e),
+          retry: () => void handleOpenGitHistory(),
+          retryLabel: "Retry",
+        });
       }
     }
     setIsBottomPanelOpen(true);
@@ -2843,7 +3177,14 @@ function App() {
         setUpdateStatusMessage("You’re already on the latest version.");
       }
     } catch (e) {
-      setUpdateStatusMessage(String(e));
+      setError({
+        category: "update",
+        title: "Update Check Failed",
+        details: String(e),
+        retry: () => void handleOpenUpdateModal(),
+        retryLabel: "Retry Check",
+      });
+      setUpdateStatusMessage("Update check failed.");
     } finally {
       setIsCheckingForUpdates(false);
     }
@@ -2989,6 +3330,50 @@ function App() {
         },
       },
       {
+        id: "toggle-external-links",
+        title: externalLinkMode === "browser" ? "Ask Before Opening External Links" : "Open External Links Directly",
+        subtitle: externalLinkMode === "browser" ? "Require confirmation before opening external links from preview" : "Open external links in your browser immediately",
+        group: "Editor",
+        keywords: "external links browser confirm preview markdown",
+        available: true,
+        run: () => {
+          setExternalLinkMode((prev) => (prev === "browser" ? "confirm" : "browser"));
+        },
+      },
+      {
+        id: "open-error-log",
+        title: "Open Error Log",
+        subtitle: errorLog.length === 0 ? "Review recent operation failures" : `${errorLog.length} recent error${errorLog.length === 1 ? "" : "s"}`,
+        group: "View",
+        keywords: "error log diagnostics failures retry",
+        available: true,
+        run: () => {
+          setErrorLogOpen(true);
+        },
+      },
+      {
+        id: "open-debug-panel",
+        title: "Open Debug Panel",
+        subtitle: "Inspect current workspace and editor state",
+        group: "View",
+        keywords: "debug diagnostics state session tabs git",
+        available: true,
+        run: () => {
+          setDebugPanelOpen(true);
+        },
+      },
+      {
+        id: "open-preview-side-by-side",
+        title: isActiveSplitPreviewOpen ? "Close Split Preview" : "Open Preview Side By Side",
+        subtitle: isActiveSplitPreviewOpen ? "Return to a single editor or preview surface" : "Show the editor and preview side by side for the current file",
+        group: "Editor",
+        keywords: "split preview side by side markdown html csv table",
+        available: Boolean(activeTab && isPreviewableTab),
+        run: () => {
+          setActiveSplitPreviewOpen(!isActiveSplitPreviewOpen);
+        },
+      },
+      {
         id: "open-folder",
         title: "Open Folder",
         subtitle: "Switch to another project directory",
@@ -3031,6 +3416,11 @@ function App() {
     autoSaveMode,
     branches,
     currentBranch,
+    debugPanelOpen,
+    errorLog.length,
+    externalLinkMode,
+    isActiveSplitPreviewOpen,
+    isPreviewableTab,
     handleOpenBranchSwitcher,
     closedTabHistory.length,
     createProjectWindow,
@@ -3038,6 +3428,7 @@ function App() {
     handleOpenGitHistory,
     handleOpenUpdateModal,
     handleRevealActiveFile,
+    setActiveSplitPreviewOpen,
     handleReopenClosedTab,
     handleSave,
     handleSaveAll,
@@ -3153,7 +3544,14 @@ function App() {
       setUpdateStatusMessage(`Updated to ${installedUpdate.version}. Restarting…`);
       await relaunch();
     } catch (e) {
-      setUpdateStatusMessage(String(e));
+      setError({
+        category: "update",
+        title: "Install Update Failed",
+        details: String(e),
+        retry: () => void handleInstallUpdate(),
+        retryLabel: "Retry Install",
+      });
+      setUpdateStatusMessage("Update install failed.");
     } finally {
       setIsInstallingUpdate(false);
     }
@@ -3452,7 +3850,13 @@ function App() {
 
     void refreshTreeSubdirectory(nextFolderToLoad.path)
       .catch((e) => {
-        setError(String(e));
+        setError({
+          category: "filesystem",
+          title: "Folder Refresh Failed",
+          details: String(e),
+          retry: () => void refreshTreeSubdirectory(nextFolderToLoad.path),
+          retryLabel: "Retry",
+        });
       })
       .finally(() => {
         setLoadingFolderPaths((prev) => {
@@ -3504,7 +3908,13 @@ function App() {
       setSelectedDiffFile(null);
       setFileDiff(null);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "git",
+        title: "Revert File Failed",
+        details: String(e),
+        retry: () => void performDiscardFileChanges(filePath),
+        retryLabel: "Retry Revert",
+      });
     }
   }, [projectRoot, projectFileIndexLoaded, projectFilePaths, openTabs, activeTab, activeTabPath, refreshGitData, refreshTreeSubdirectory]);
 
@@ -3524,7 +3934,13 @@ function App() {
       setSelectedDiffHunkIndex(0);
       await refreshGitData();
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "git",
+        title: "Commit Failed",
+        details: String(e),
+        retry: () => void handleCommit(),
+        retryLabel: "Retry Commit",
+      });
     } finally {
       setIsCommitting(false);
     }
@@ -3537,7 +3953,13 @@ function App() {
       await push(projectRoot);
       await refreshGitData();
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "git",
+        title: "Push Failed",
+        details: String(e),
+        retry: () => void handlePush(),
+        retryLabel: "Retry Push",
+      });
     } finally {
       setIsPushing(false);
     }
@@ -3594,7 +4016,13 @@ function App() {
       // Open the new file
       await handleOpenFile(fullPath, undefined, "create-file");
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "filesystem",
+        title: "Create File Failed",
+        details: String(e),
+        retry: () => void handleCreateFile(dirPath, name),
+        retryLabel: "Retry Create",
+      });
     }
   }, [projectRoot, projectFileIndexLoaded, handleOpenFile, refreshTreeSubdirectory]);
 
@@ -3607,7 +4035,13 @@ function App() {
       // Auto-open the new folder
       setOpenFolders(prev => new Set([...prev, fullPath]));
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "filesystem",
+        title: "Create Folder Failed",
+        details: String(e),
+        retry: () => void handleCreateDirectory(dirPath, name),
+        retryLabel: "Retry Create",
+      });
     }
   }, [projectRoot, refreshTreeSubdirectory]);
 
@@ -3680,7 +4114,13 @@ function App() {
       }
       await refreshTreeSubdirectory(parentPath || projectRoot);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "filesystem",
+        title: "Rename Failed",
+        details: String(e),
+        retry: () => void handleRename(oldPath, newName),
+        retryLabel: "Retry Rename",
+      });
     }
   }, [projectRoot, projectFileIndexLoaded, isSameOrDescendantPath, replacePathPrefix, refreshTreeSubdirectory]);
 
@@ -3731,11 +4171,13 @@ function App() {
         }
         return next;
       });
-      setNavHistory(prev => prev.filter(entry => !isSameOrDescendantPath(entry.path, path)));
-      setNavIndex(prev => {
-        const nextHistory = navHistory.filter(entry => !isSameOrDescendantPath(entry.path, path));
-        return nextHistory.length === 0 ? -1 : Math.min(prev, nextHistory.length - 1);
+      let nextHistoryLength = 0;
+      setNavHistory(prev => {
+        const nextHistory = prev.filter(entry => !isSameOrDescendantPath(entry.path, path));
+        nextHistoryLength = nextHistory.length;
+        return nextHistory;
       });
+      setNavIndex(prev => nextHistoryLength === 0 ? -1 : Math.min(prev, nextHistoryLength - 1));
       setActiveTabPath(prev => {
         if (!isSameOrDescendantPath(prev, path)) return prev;
         return nextDisplayTabs.length > 0 ? nextDisplayTabs[0].path : "";
@@ -3747,15 +4189,27 @@ function App() {
       setTree((currentTree) => currentTree ? removeNodeByPath(currentTree, path) : currentTree);
       await refreshTreeSubdirectory(parentPath);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "filesystem",
+        title: "Delete Failed",
+        details: String(e),
+        retry: () => void handleDelete(path, isDir),
+        retryLabel: "Retry Delete",
+      });
     }
-  }, [projectRoot, projectFileIndexLoaded, openTabs, navHistory, isSameOrDescendantPath, refreshTreeSubdirectory]);
+  }, [projectRoot, projectFileIndexLoaded, openTabs, isSameOrDescendantPath, refreshTreeSubdirectory]);
 
   const handleRevealInSystem = useCallback(async (path: string, isDir: boolean) => {
     try {
       await revealInSystem(path, isDir);
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "filesystem",
+        title: "Reveal In Finder Failed",
+        details: String(e),
+        retry: () => void handleRevealInSystem(path, isDir),
+        retryLabel: "Retry Reveal",
+      });
     }
   }, []);
 
@@ -3768,7 +4222,13 @@ function App() {
         void loadProjectFileIndex(true);
       }
     } catch (e) {
-      setError(String(e));
+      setError({
+        category: "filesystem",
+        title: "Refresh Tree Failed",
+        details: String(e),
+        retry: () => void handleRefreshTree(),
+        retryLabel: "Retry Refresh",
+      });
     }
   }, [projectRoot, projectFileIndexLoaded, loadProjectFileIndex]);
 
@@ -4029,6 +4489,7 @@ function App() {
         pinned_tab_paths: Array.from(pinnedTabPaths),
         editor_view_states: Object.fromEntries(editorViewStateRef.current.entries()),
         auto_save_mode: autoSaveMode,
+        external_link_mode: externalLinkMode,
         active_tab_path: activeTabPath,
         open_folders: Array.from(openFolders),
         recent_file_paths: recentFilePaths,
@@ -4046,6 +4507,7 @@ function App() {
     openTabs,
     pinnedTabPaths,
     autoSaveMode,
+    externalLinkMode,
     activeTabPath,
     openFolders,
     recentFilePaths,
@@ -4509,6 +4971,357 @@ function App() {
       window.removeEventListener("mouseup", onMouseUp);
     };
   }, []);
+
+  const previewSurface = activeTab ? (
+    isImageTab && activeImageSrc ? (
+      <div className="image-preview">
+        <div className="image-preview-toolbar">
+          <div className="image-preview-actions">
+            <button
+              type="button"
+              className={`image-preview-btn ${imageFitMode === "fit" ? "active" : ""}`}
+              onClick={() => {
+                setImageFitMode("fit");
+                setImageZoom(100);
+              }}
+            >
+              Fit
+            </button>
+            <button
+              type="button"
+              className={`image-preview-btn ${imageFitMode === "actual" ? "active" : ""}`}
+              onClick={() => setImageFitMode("actual")}
+            >
+              Actual
+            </button>
+            <button
+              type="button"
+              className="image-preview-btn"
+              onClick={() => setImageZoom((prev) => Math.max(25, prev - 25))}
+            >
+              −
+            </button>
+            <span className="image-preview-zoom">{imageZoom}%</span>
+            <button
+              type="button"
+              className="image-preview-btn"
+              onClick={() => setImageZoom((prev) => Math.min(400, prev + 25))}
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="image-preview-btn"
+              onClick={() => {
+                setImageFitMode("fit");
+                setImageZoom(100);
+              }}
+            >
+              Reset
+            </button>
+          </div>
+          <div className="image-preview-meta">
+            {imageNaturalSize ? `${imageNaturalSize.width} × ${imageNaturalSize.height}` : "Loading image…"}
+          </div>
+        </div>
+        {imagePreviewError ? (
+          <div className="image-preview-error">
+            <div className="empty-state-card">
+              <div className="empty-state-title">Image preview failed</div>
+              <div className="empty-state-subtitle">{imagePreviewError}</div>
+            </div>
+          </div>
+        ) : (
+          <div className={`image-preview-stage ${imageFitMode === "actual" ? "actual" : "fit"}`}>
+            <img
+              className="image-preview-content"
+              src={activeImageSrc}
+              alt={activeTab.path}
+              style={{ transform: `scale(${imageZoom / 100})` }}
+              onLoad={(event) => {
+                setImageNaturalSize({
+                  width: event.currentTarget.naturalWidth,
+                  height: event.currentTarget.naturalHeight,
+                });
+              }}
+              onError={() => setImagePreviewError(activeTab.path)}
+            />
+          </div>
+        )}
+      </div>
+    ) : isMarkdownTab ? (
+      (() => {
+        const outlineHeadings = renderedMarkdownHeadings.length > 0 ? renderedMarkdownHeadings : markdownHeadings;
+        const renderedHeadingCounts = new Map<string, number>();
+        const renderHeading = (level: number, children: ReactNode) => {
+          const text = extractTextFromReactNode(children).trim();
+          const baseSlug = slugifyHeading(text) || `section-${renderedHeadingCounts.size + 1}`;
+          const seen = renderedHeadingCounts.get(baseSlug) ?? 0;
+          renderedHeadingCounts.set(baseSlug, seen + 1);
+          const id = seen === 0 ? baseSlug : `${baseSlug}-${seen + 1}`;
+          const className = `md-heading md-heading-${level}`;
+
+          switch (level) {
+            case 1:
+              return <h1 id={id} className={className}>{children}</h1>;
+            case 2:
+              return <h2 id={id} className={className}>{children}</h2>;
+            case 3:
+              return <h3 id={id} className={className}>{children}</h3>;
+            case 4:
+              return <h4 id={id} className={className}>{children}</h4>;
+            case 5:
+              return <h5 id={id} className={className}>{children}</h5>;
+            default:
+              return <h6 id={id} className={className}>{children}</h6>;
+          }
+        };
+        return (
+          <div className="markdown-preview">
+            <div className="markdown-preview-toolbar">
+              <div className="markdown-preview-meta">
+                Previewing {toRelativePath(projectRoot, activeTab.path)}
+              </div>
+              <div className="preview-toolbar-actions">
+                <div className="markdown-preview-meta">
+                  {outlineHeadings.length} section{outlineHeadings.length === 1 ? "" : "s"}
+                </div>
+                <button
+                  type="button"
+                  className="image-preview-btn"
+                  onClick={() => setExternalLinkMode((prev) => (prev === "browser" ? "confirm" : "browser"))}
+                  title="Toggle external link handling"
+                >
+                  Links: {externalLinkMode === "browser" ? "Browser" : "Ask"}
+                </button>
+              </div>
+            </div>
+            <div className={`markdown-preview-layout ${outlineHeadings.length > 0 ? "has-outline" : ""}`}>
+              {outlineHeadings.length > 0 && (
+                <aside className="markdown-outline">
+                  <div className="markdown-outline-title">Outline</div>
+                  <div className="markdown-outline-list">
+                    {outlineHeadings.map((heading) => (
+                      <button
+                        key={heading.id}
+                        type="button"
+                        className={`markdown-outline-item level-${heading.level}`}
+                        onClick={() => scrollMarkdownHeadingIntoView(heading.id)}
+                      >
+                        {heading.text}
+                      </button>
+                    ))}
+                  </div>
+                </aside>
+              )}
+              <div ref={markdownPreviewScrollRef} className="markdown-preview-inner">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    h1: ({ children }) => renderHeading(1, children),
+                    h2: ({ children }) => renderHeading(2, children),
+                    h3: ({ children }) => renderHeading(3, children),
+                    h4: ({ children }) => renderHeading(4, children),
+                    h5: ({ children }) => renderHeading(5, children),
+                    h6: ({ children }) => renderHeading(6, children),
+                    p: ({ children }) => <p className="md-paragraph">{children}</p>,
+                    ul: ({ children }) => <ul className="md-list">{children}</ul>,
+                    ol: ({ children }) => <ol className="md-list">{children}</ol>,
+                    blockquote: ({ children }) => <blockquote className="md-quote">{children}</blockquote>,
+                    a: ({ children, href }) => {
+                      const { path: hrefPath, hash } = href ? splitMarkdownHref(href) : { path: "", hash: "" };
+                      const resolvedPath = hrefPath && activeTab?.path
+                        ? resolveMarkdownResourcePath(activeTab.path, hrefPath, projectRoot)
+                        : null;
+                      const isLocalAnchor = !hrefPath && !!hash;
+                      if (isLocalAnchor || resolvedPath) {
+                        return (
+                          <button
+                            type="button"
+                            className="md-link md-link-button"
+                            onClick={() => {
+                              if (!href) return;
+                              void handleMarkdownPreviewLink(href);
+                            }}
+                          >
+                            {children}
+                          </button>
+                        );
+                      }
+                      return (
+                        <a className="md-link" href={href} target="_blank" rel="noreferrer">
+                          {children}
+                        </a>
+                      );
+                    },
+                    code: ({ children, className }) => {
+                      const language = className?.replace(/^language-/, "") ?? "";
+                      const text = String(children).replace(/\n$/, "");
+                      if (!className) {
+                        return <code className="md-inline-code">{text}</code>;
+                      }
+                      return (
+                        <div className="md-code-block">
+                          {language ? <div className="md-code-language">{language}</div> : null}
+                          <pre><code>{text}</code></pre>
+                        </div>
+                      );
+                    },
+                    img: ({ src, alt }) => {
+                      if (!activeTab?.path) return null;
+                      return (
+                        <MarkdownImage
+                          src={src}
+                          alt={alt}
+                          baseFilePath={activeTab.path}
+                          projectRoot={projectRoot}
+                        />
+                      );
+                    },
+                    table: ({ children }) => <div className="md-table-wrap"><table className="md-table">{children}</table></div>,
+                    th: ({ children }) => <th className="md-table-head">{children}</th>,
+                    td: ({ children }) => <td className="md-table-cell">{children}</td>,
+                    hr: () => <hr className="md-divider" />,
+                    input: ({ checked, type, disabled }) =>
+                      type === "checkbox" ? (
+                        <input className="md-task-checkbox" type="checkbox" checked={checked} disabled={disabled ?? true} readOnly />
+                      ) : (
+                        <input type={type} checked={checked} disabled={disabled} readOnly />
+                      ),
+                  }}
+                >
+                  {markdownPreviewContent}
+                </ReactMarkdown>
+              </div>
+            </div>
+          </div>
+        );
+      })()
+    ) : isHtmlTab ? (
+      <div className="html-preview">
+        <div className="html-preview-toolbar">
+          <div className="html-preview-meta">
+            Previewing {toRelativePath(projectRoot, activeTab.path)}
+          </div>
+          <div className="html-preview-meta">
+            Sandboxed inline HTML preview
+          </div>
+        </div>
+        <iframe
+          key={activeTab.path}
+          className="html-preview-frame"
+          sandbox="allow-same-origin allow-scripts"
+          srcDoc={injectHtmlPreviewBase(activeTab.content, activeTab.path)}
+          title={`HTML preview for ${toRelativePath(projectRoot, activeTab.path)}`}
+        />
+      </div>
+    ) : isDelimitedTableTab ? (
+      <div className="table-preview">
+        <div className="table-preview-toolbar">
+          <div className="table-preview-meta">
+            Previewing {toRelativePath(projectRoot, activeTab.path)}
+          </div>
+          <div className="table-preview-meta">
+            {activeTablePreview?.totalRows ?? 0} row{(activeTablePreview?.totalRows ?? 0) === 1 ? "" : "s"} · {activeTablePreview?.columnCount ?? 0} column{(activeTablePreview?.columnCount ?? 0) === 1 ? "" : "s"}
+          </div>
+        </div>
+        {!activeTablePreview || activeTablePreview.columnCount === 0 ? (
+          <div className="table-preview-empty">
+            No tabular data found in this file.
+          </div>
+        ) : (
+          <div className="table-preview-scroller">
+            <table className="table-preview-grid">
+              <thead>
+                <tr>
+                  {Array.from({ length: activeTablePreview.columnCount }, (_, index) => (
+                    <th key={index}>
+                      {activeTablePreview.header[index] || `Column ${index + 1}`}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {activeTablePreview.rows.map((row, rowIndex) => (
+                  <tr key={rowIndex}>
+                    {Array.from({ length: activeTablePreview.columnCount }, (_, columnIndex) => (
+                      <td key={columnIndex}>{row[columnIndex] ?? ""}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {activeTablePreview.truncated && (
+              <div className="table-preview-note">
+                Showing the first 200 rows in preview.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    ) : null
+  ) : null;
+
+  const editorSurface = activeTab ? (
+    activeTab.isLoading ? (
+      <div className="code-placeholder">
+        <div className="empty-state-card">
+          <div className="empty-state-title">Loading file…</div>
+          <div className="empty-state-subtitle">{activeTab.path}</div>
+        </div>
+      </div>
+    ) : activeTab.loadError ? (
+      <div className="code-placeholder">
+        <div className="empty-state-card">
+          <div className="empty-state-title">File cannot be opened in editor</div>
+          <div className="empty-state-subtitle">{activeTab.path}</div>
+          <div className="empty-state-subtitle" style={{ marginTop: 8 }}>
+            {activeTab.loadError}
+          </div>
+        </div>
+      </div>
+    ) : (
+      <CodeMirror
+        key={activeTab.path}
+        ref={editorRef}
+        value={activeTab.content}
+        height="100%"
+        theme={dracula}
+        extensions={[
+          editorDomHandlers,
+          editorKeybindings,
+          ...langFromPath(activeTab.path),
+          ...modifiedLineExtensions,
+          ...searchHighlightExtensions,
+        ]}
+        editable
+        onUpdate={(update) => {
+          if (!update.view.hasFocus && !update.docChanged && !update.selectionSet && !update.viewportChanged) {
+            return;
+          }
+          editorViewStateRef.current.set(activeTab.path, {
+            selection_anchor: update.state.selection.main.head,
+            scroll_top: update.view.scrollDOM.scrollTop,
+          });
+        }}
+        onChange={(value) =>
+          setOpenTabs((prev) =>
+            prev.map((t) =>
+              t.path === activeTabPath
+                ? { ...t, content: value, isDirty: true }
+                : t
+            )
+          )
+        }
+        basicSetup={{
+          lineNumbers: true,
+          highlightActiveLineGutter: false,
+          highlightActiveLine: false,
+          foldGutter: false,
+        }}
+      />
+    )
+  ) : null;
 
   return (
     <div className="app">
@@ -5189,6 +6002,90 @@ function App() {
         </div>
       )}
 
+      {errorLogOpen && (
+        <div className="finder-overlay" onClick={() => setErrorLogOpen(false)}>
+          <div className="finder-modal error-log-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="finder-header">Recent Errors</div>
+            <div className="error-log-body">
+              {errorLog.length === 0 ? (
+                <div className="finder-empty">No recent errors</div>
+              ) : (
+                errorLog.map((entry) => (
+                  <div key={entry.id} className="error-log-item">
+                    <div className="error-log-meta">
+                      <span className={`error-log-badge category-${entry.category}`}>{entry.category}</span>
+                      <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <div className="error-log-title">{entry.title}</div>
+                    <div className="error-log-message">{entry.message}</div>
+                    <pre className="error-log-details">{entry.details}</pre>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="finder-actions">
+              <button className="search-btn" onClick={() => setErrorLogOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {debugPanelOpen && (
+        <div className="finder-overlay" onClick={() => setDebugPanelOpen(false)}>
+          <div className="finder-modal error-log-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="finder-header">Debug Panel</div>
+            <div className="error-log-body">
+              <div className="error-log-item">
+                <div className="error-log-title">Workspace</div>
+                <pre className="error-log-details">{JSON.stringify({
+                  projectRoot,
+                  rootName,
+                  isGitRepo,
+                  currentBranch,
+                  gitChanges: gitChanges.length,
+                  stagedFiles: stagedFiles.length,
+                  openFolders: openFolders.size,
+                  projectFileIndexLoaded,
+                  projectFileIndexLoading,
+                }, null, 2)}</pre>
+              </div>
+              <div className="error-log-item">
+                <div className="error-log-title">Editor</div>
+                <pre className="error-log-details">{JSON.stringify({
+                  activeTabPath,
+                  openTabs: openTabs.length,
+                  pinnedTabs: pinnedTabPaths.size,
+                  dirtyTabs: openTabs.filter((tab) => tab.isDirty).length,
+                  previewOpen: isActivePreviewOpen,
+                  splitPreviewOpen: isActiveSplitPreviewOpen,
+                  bottomPanelTab,
+                  isBottomPanelOpen,
+                }, null, 2)}</pre>
+              </div>
+              <div className="error-log-item">
+                <div className="error-log-title">Diagnostics</div>
+                <pre className="error-log-details">{JSON.stringify({
+                  recentFiles: recentFilePaths.length,
+                  recentProjects: recentProjects.length,
+                  navigationHistory: navHistory.length,
+                  navIndex,
+                  errorLog: errorLog.length,
+                  autoSaveMode,
+                  externalLinkMode,
+                }, null, 2)}</pre>
+              </div>
+            </div>
+            <div className="finder-actions">
+              <button className="search-btn" onClick={() => setDebugPanelOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {updateModalOpen && (
         <div className="finder-overlay" onClick={() => !isInstallingUpdate && setUpdateModalOpen(false)}>
           <div className="finder-modal update-modal" onClick={(e) => e.stopPropagation()}>
@@ -5454,21 +6351,28 @@ function App() {
             {!activeTab?.isDirty && saveStatus === "error" && (
               <span className="editor-status-badge error">Save Failed</span>
             )}
-            {isMarkdownTab && !activeTab?.isLoading && (
+            {isPreviewableTab && !activeTab?.isLoading && (
               <div className="editor-mode-toggle">
                 <button
                   type="button"
-                  className={`editor-mode-button ${!isActiveMarkdownPreviewOpen ? "active" : ""}`}
-                  onClick={() => setActiveMarkdownPreviewOpen(false)}
+                  className={`editor-mode-button ${!isActivePreviewOpen && !isActiveSplitPreviewOpen ? "active" : ""}`}
+                  onClick={() => setActivePreviewOpen(false)}
                 >
                   Edit
                 </button>
                 <button
                   type="button"
-                  className={`editor-mode-button ${isActiveMarkdownPreviewOpen ? "active" : ""}`}
-                  onClick={() => setActiveMarkdownPreviewOpen(true)}
+                  className={`editor-mode-button ${isActivePreviewOpen && !isActiveSplitPreviewOpen ? "active" : ""}`}
+                  onClick={() => setActivePreviewOpen(true)}
                 >
                   Preview
+                </button>
+                <button
+                  type="button"
+                  className={`editor-mode-button ${isActiveSplitPreviewOpen ? "active" : ""}`}
+                  onClick={() => setActiveSplitPreviewOpen(!isActiveSplitPreviewOpen)}
+                >
+                  Split
                 </button>
                 <span className="editor-mode-hint">{shortcutLabel("M", { shift: true })}</span>
               </div>
@@ -5558,295 +6462,46 @@ function App() {
             </div>
           )}
           {error && (
-            <div
-              className="error-banner"
-              style={{
-                padding: "8px 12px",
-                background: "#3a1c1c",
-                color: "#ff6b6b",
-                borderBottom: "1px solid #5c2a2a",
-                fontSize: 13,
-              }}
-            >
-              {error}
+            <div className={`error-banner error-banner-${error.category}`}>
+              <div className="error-banner-main">
+                <div className="error-banner-title">{error.title}</div>
+                <div className="error-banner-message">{error.message}</div>
+              </div>
+              <div className="error-banner-actions">
+                {errorRetryRef.current && (
+                  <button
+                    className="search-btn"
+                    onClick={() => {
+                      const retry = errorRetryRef.current;
+                      if (!retry) return;
+                      void retry();
+                    }}
+                  >
+                    {error.retryLabel ?? "Retry"}
+                  </button>
+                )}
+                <button className="search-btn" onClick={() => setErrorLogOpen(true)}>
+                  Error Log
+                </button>
+                <button className="search-btn" onClick={() => setError(null)}>
+                  Dismiss
+                </button>
+              </div>
             </div>
           )}
           <div className="code-editor">
             {activeTab ? (
-              activeTab.isLoading ? (
-                <div className="code-placeholder">
-                  <div className="empty-state-card">
-                    <div className="empty-state-title">Loading file…</div>
-                    <div className="empty-state-subtitle">{activeTab.path}</div>
+              isActiveSplitPreviewOpen && previewSurface && !activeTab.isLoading && !activeTab.loadError ? (
+                <div className="editor-split-view">
+                  <div className="editor-split-pane editor-split-pane-editor">
+                    {editorSurface}
+                  </div>
+                  <div className="editor-split-divider" />
+                  <div className="editor-split-pane editor-split-pane-preview">
+                    {previewSurface}
                   </div>
                 </div>
-              ) : activeTab.loadError ? (
-                <div className="code-placeholder">
-                  <div className="empty-state-card">
-                    <div className="empty-state-title">File cannot be opened in editor</div>
-                    <div className="empty-state-subtitle">{activeTab.path}</div>
-                    <div className="empty-state-subtitle" style={{ marginTop: 8 }}>
-                      {activeTab.loadError}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-              isImageTab && activeImageSrc ? (
-                <div className="image-preview">
-                  <div className="image-preview-toolbar">
-                    <div className="image-preview-actions">
-                      <button
-                        type="button"
-                        className={`image-preview-btn ${imageFitMode === "fit" ? "active" : ""}`}
-                        onClick={() => {
-                          setImageFitMode("fit");
-                          setImageZoom(100);
-                        }}
-                      >
-                        Fit
-                      </button>
-                      <button
-                        type="button"
-                        className={`image-preview-btn ${imageFitMode === "actual" ? "active" : ""}`}
-                        onClick={() => setImageFitMode("actual")}
-                      >
-                        Actual
-                      </button>
-                      <button
-                        type="button"
-                        className="image-preview-btn"
-                        onClick={() => setImageZoom((prev) => Math.max(25, prev - 25))}
-                      >
-                        −
-                      </button>
-                      <span className="image-preview-zoom">{imageZoom}%</span>
-                      <button
-                        type="button"
-                        className="image-preview-btn"
-                        onClick={() => setImageZoom((prev) => Math.min(400, prev + 25))}
-                      >
-                        +
-                      </button>
-                      <button
-                        type="button"
-                        className="image-preview-btn"
-                        onClick={() => {
-                          setImageFitMode("fit");
-                          setImageZoom(100);
-                        }}
-                      >
-                        Reset
-                      </button>
-                    </div>
-                    <div className="image-preview-meta">
-                      {imageNaturalSize ? `${imageNaturalSize.width} × ${imageNaturalSize.height}` : "Loading image…"}
-                    </div>
-                  </div>
-                  {imagePreviewError ? (
-                    <div className="image-preview-error">
-                      <div className="empty-state-card">
-                        <div className="empty-state-title">Image preview failed</div>
-                        <div className="empty-state-subtitle">{imagePreviewError}</div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={`image-preview-stage ${imageFitMode === "actual" ? "actual" : "fit"}`}>
-                      <img
-                        className="image-preview-content"
-                        src={activeImageSrc}
-                        alt={activeTab.path}
-                        style={{ transform: `scale(${imageZoom / 100})` }}
-                        onLoad={(event) => {
-                          setImageNaturalSize({
-                            width: event.currentTarget.naturalWidth,
-                            height: event.currentTarget.naturalHeight,
-                          });
-                        }}
-                        onError={() => setImagePreviewError(activeTab.path)}
-                      />
-                    </div>
-                  )}
-                </div>
-              ) : isActiveMarkdownPreviewOpen && isMarkdownTab ? (
-                (() => {
-                  const outlineHeadings = renderedMarkdownHeadings.length > 0 ? renderedMarkdownHeadings : markdownHeadings;
-                  const renderedHeadingCounts = new Map<string, number>();
-                  const renderHeading = (level: number, children: ReactNode) => {
-                    const text = extractTextFromReactNode(children).trim();
-                    const baseSlug = slugifyHeading(text) || `section-${renderedHeadingCounts.size + 1}`;
-                    const seen = renderedHeadingCounts.get(baseSlug) ?? 0;
-                    renderedHeadingCounts.set(baseSlug, seen + 1);
-                    const id = seen === 0 ? baseSlug : `${baseSlug}-${seen + 1}`;
-                    const className = `md-heading md-heading-${level}`;
-
-                    switch (level) {
-                      case 1:
-                        return <h1 id={id} className={className}>{children}</h1>;
-                      case 2:
-                        return <h2 id={id} className={className}>{children}</h2>;
-                      case 3:
-                        return <h3 id={id} className={className}>{children}</h3>;
-                      case 4:
-                        return <h4 id={id} className={className}>{children}</h4>;
-                      case 5:
-                        return <h5 id={id} className={className}>{children}</h5>;
-                      default:
-                        return <h6 id={id} className={className}>{children}</h6>;
-                    }
-                  };
-                  return (
-                    <div className="markdown-preview">
-                      <div className="markdown-preview-toolbar">
-                        <div className="markdown-preview-meta">
-                          Previewing {toRelativePath(projectRoot, activeTab.path)}
-                        </div>
-                        <div className="markdown-preview-meta">
-                          {outlineHeadings.length} section{outlineHeadings.length === 1 ? "" : "s"}
-                        </div>
-                      </div>
-                      <div className={`markdown-preview-layout ${outlineHeadings.length > 0 ? "has-outline" : ""}`}>
-                        {outlineHeadings.length > 0 && (
-                          <aside className="markdown-outline">
-                            <div className="markdown-outline-title">Outline</div>
-                            <div className="markdown-outline-list">
-                              {outlineHeadings.map((heading) => (
-                                <button
-                                  key={heading.id}
-                                  type="button"
-                                  className={`markdown-outline-item level-${heading.level}`}
-                                  onClick={() => scrollMarkdownHeadingIntoView(heading.id)}
-                                >
-                                  {heading.text}
-                                </button>
-                              ))}
-                            </div>
-                          </aside>
-                        )}
-                        <div ref={markdownPreviewScrollRef} className="markdown-preview-inner">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              h1: ({ children }) => renderHeading(1, children),
-                              h2: ({ children }) => renderHeading(2, children),
-                              h3: ({ children }) => renderHeading(3, children),
-                              h4: ({ children }) => renderHeading(4, children),
-                              h5: ({ children }) => renderHeading(5, children),
-                              h6: ({ children }) => renderHeading(6, children),
-                              p: ({ children }) => <p className="md-paragraph">{children}</p>,
-                              ul: ({ children }) => <ul className="md-list">{children}</ul>,
-                              ol: ({ children }) => <ol className="md-list">{children}</ol>,
-                              blockquote: ({ children }) => <blockquote className="md-quote">{children}</blockquote>,
-                              a: ({ children, href }) => {
-                                const { path: hrefPath, hash } = href ? splitMarkdownHref(href) : { path: "", hash: "" };
-                                const resolvedPath = hrefPath && activeTab?.path
-                                  ? resolveMarkdownResourcePath(activeTab.path, hrefPath, projectRoot)
-                                  : null;
-                                const isLocalAnchor = !hrefPath && !!hash;
-                                if (isLocalAnchor || resolvedPath) {
-                                  return (
-                                    <button
-                                      type="button"
-                                      className="md-link md-link-button"
-                                      onClick={() => {
-                                        if (!href) return;
-                                        void handleMarkdownPreviewLink(href);
-                                      }}
-                                    >
-                                      {children}
-                                    </button>
-                                  );
-                                }
-                                return (
-                                  <a className="md-link" href={href} target="_blank" rel="noreferrer">
-                                    {children}
-                                  </a>
-                                );
-                              },
-                              code: ({ children, className }) => {
-                                const language = className?.replace(/^language-/, "") ?? "";
-                                const text = String(children).replace(/\n$/, "");
-                                if (!className) {
-                                  return <code className="md-inline-code">{text}</code>;
-                                }
-                                return (
-                                  <div className="md-code-block">
-                                    {language ? <div className="md-code-language">{language}</div> : null}
-                                    <pre><code>{text}</code></pre>
-                                  </div>
-                                );
-                              },
-                              img: ({ src, alt }) => {
-                                if (!activeTab?.path) return null;
-                                return (
-                                  <MarkdownImage
-                                    src={src}
-                                    alt={alt}
-                                    baseFilePath={activeTab.path}
-                                    projectRoot={projectRoot}
-                                  />
-                                );
-                              },
-                              table: ({ children }) => <div className="md-table-wrap"><table className="md-table">{children}</table></div>,
-                              th: ({ children }) => <th className="md-table-head">{children}</th>,
-                              td: ({ children }) => <td className="md-table-cell">{children}</td>,
-                              hr: () => <hr className="md-divider" />,
-                              input: ({ checked, type, disabled }) =>
-                                type === "checkbox" ? (
-                                  <input className="md-task-checkbox" type="checkbox" checked={checked} disabled={disabled ?? true} readOnly />
-                                ) : (
-                                  <input type={type} checked={checked} disabled={disabled} readOnly />
-                                ),
-                            }}
-                          >
-                            {markdownPreviewContent}
-                          </ReactMarkdown>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()
-              ) : (
-                <CodeMirror
-                  key={activeTab.path}
-                  ref={editorRef}
-                  value={activeTab.content}
-                  height="100%"
-                  theme={dracula}
-                  extensions={[
-                    editorDomHandlers,
-                    editorKeybindings,
-                    ...langFromPath(activeTab.path),
-                    ...modifiedLineExtensions,
-                    ...searchHighlightExtensions,
-                  ]}
-                  editable
-                  onUpdate={(update) => {
-                    if (!update.view.hasFocus && !update.docChanged && !update.selectionSet && !update.viewportChanged) {
-                      return;
-                    }
-                    editorViewStateRef.current.set(activeTab.path, {
-                      selection_anchor: update.state.selection.main.head,
-                      scroll_top: update.view.scrollDOM.scrollTop,
-                    });
-                  }}
-                  onChange={(value) =>
-                    setOpenTabs((prev) =>
-                      prev.map((t) =>
-                        t.path === activeTabPath
-                          ? { ...t, content: value, isDirty: true }
-                          : t
-                      )
-                    )
-                  }
-                  basicSetup={{
-                    lineNumbers: true,
-                    highlightActiveLineGutter: false,
-                    highlightActiveLine: false,
-                    foldGutter: false,
-                  }}
-                />
-              )
-              )
+              ) : (isActivePreviewOpen && previewSurface ? previewSurface : editorSurface)
             ) : projectRoot && tree ? (
               <div className="code-placeholder">
                 <div className="empty-state-card">

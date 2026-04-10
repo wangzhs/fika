@@ -125,6 +125,7 @@ export interface EditorViewStateSnapshot {
 }
 
 export type AutoSaveMode = "off" | "after_delay";
+export type ExternalLinkMode = "browser" | "confirm";
 
 export interface SessionState {
   project_root: string | null;
@@ -132,6 +133,7 @@ export interface SessionState {
   pinned_tab_paths: string[];
   editor_view_states: Record<string, EditorViewStateSnapshot>;
   auto_save_mode: AutoSaveMode;
+  external_link_mode: ExternalLinkMode;
   active_tab_path: string;
   open_folders: string[];
   recent_file_paths: string[];
